@@ -1,0 +1,80 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Phantom Stealer",
+  "projectDescription": "A Windows information stealer written in Go for security research and malware analysis, demonstrating browser password extraction, crypto wallet theft, and anti-analysis evasion techniques.",
+  "theme": "aspen",
+  "primaryColor": "#8B0000",
+  "lightColor": "#DC143C",
+  "darkColor": "#4B0000",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "building"
+            ]
+          },
+          {
+            "group": "Core Modules",
+            "pages": [
+              "modules/browsers",
+              "modules/wallets",
+              "modules/tokens",
+              "modules/evasion",
+              "modules/reconnaissance",
+              "modules/persistence",
+              "modules/exfiltration"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/settings",
+              "configuration/targets"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Security Research",
+        "groups": [
+          {
+            "group": "Analysis",
+            "pages": [
+              "security/detection",
+              "security/defense",
+              "security/legal"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Browser password and cookie extraction (Chrome, Edge, Brave, Firefox, Opera)",
+    "Crypto wallet theft (40+ desktop and browser extension wallets)",
+    "Discord, Telegram, and Steam token grabbing",
+    "Anti-VM and anti-debug evasion techniques",
+    "System reconnaissance and screenshot capture",
+    "Multiple persistence mechanisms (Registry, Startup, Scheduled Tasks, WMI)",
+    "Data exfiltration via Discord webhooks and Telegram bots",
+    "DPAPI decryption and AES-GCM support for modern browsers"
+  ],
+  "publicApiSurface": [
+    "browsers.StealAll() - Extract all browser credentials",
+    "wallets.StealAll() - Extract crypto wallet data",
+    "tokens.StealAll() - Grab Discord/Telegram/Steam tokens",
+    "evasion.RunAntiAnalysis() - Run anti-VM and anti-debug checks",
+    "evasion.PatchAMSI() - Bypass AMSI detection",
+    "evasion.PatchETW() - Patch ETW logging",
+    "recon.Collect() - Gather system information",
+    "recon.GrabFiles() - Extract files from target directories",
+    "persist.Install() - Install persistence mechanisms",
+    "exfil.Exfiltrate() - Send stolen data to C2"
+  ]
+}
