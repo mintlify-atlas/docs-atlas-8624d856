@@ -1,0 +1,268 @@
+---
+title: 'Detection Methods'
+description: 'How to detect Phantom Stealer and similar information stealing malware'
+---
+
+<Warning>
+  This page describes detection methods for information stealer malware like Phantom. Understanding these techniques is essential for security professionals and defenders.
+</Warning>
+
+## Overview
+
+Information stealers like Phantom use specific system behaviors and access patterns that can be detected through behavioral analysis, file system monitoring, and network traffic inspection.
+
+## Behavioral Detection
+
+<Accordion title="File Access Patterns">
+  Stealers exhibit distinctive file access patterns that can be detected:
+  
+  - **Browser Database Access**: Non-browser processes accessing browser SQLite databases
+    - Chrome: `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data`
+    - Edge: `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Login Data`
+    - Brave: `%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Login Data`
+  
+  - **Cookie Database Access**: Reading from browser cookie files
+    - `%LOCALAPPDATA%\...\Network\Cookies`
+    - `%LOCALAPPDATA%\...\Cookies`
+  
+  - **LevelDB Access**: Scanning Discord leveldb files from non-Discord processes
+    - `%APPDATA%\Discord\Local Storage\leveldb\*.ldb`
+    - `%APPDATA%\Discord\Local Storage\leveldb\*.log`
+</Accordion>
+
+<Accordion title="DPAPI Call Detection">
+  Monitor for suspicious DPAPI (Data Protection API) usage:
+  
+  - **CryptUnprotectData calls** from non-browser processes
+  - High-frequency DPAPI calls in short time periods
+  - DPAPI calls combined with SQLite database access
+  
+  EDR solutions can hook and monitor these API calls to detect credential theft attempts.
+</Accordion>
+
+<Accordion title="Process Behavior">
+  Suspicious process behaviors include:
+  
+  - Copying browser database files to temporary directories
+  - Accessing `Local State` files to extract encryption keys
+  - Reading wallet directories (`%APPDATA%\Exodus`, `%APPDATA%\Electrum`, etc.)
+  - Enumerating browser profiles and crypto wallet extensions
+  - Accessing Telegram session files (`%APPDATA%\Telegram Desktop\tdata`)
+</Accordion>
+
+## Registry Indicators
+
+<Steps>
+  <Step title="Check Run Keys">
+    Monitor these registry locations for persistence:
+    
+    ```registry
+    HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
+    HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run
+    ```
+    
+    Phantom creates entries named "WindowsUpdate" or similar legitimate-sounding names.
+  </Step>
+  
+  <Step title="Check Startup Folder">
+    Inspect the startup folder for suspicious executables:
+    
+    ```
+    %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+    ```
+    
+    Look for files with generic names like `svchost.exe` or hidden system attributes.
+  </Step>
+  
+  <Step title="Check Scheduled Tasks">
+    Query scheduled tasks for persistence mechanisms:
+    
+    ```powershell
+    Get-ScheduledTask | Where-Object {$_.TaskName -like "*Windows*Update*"}
+    ```
+    
+    Malicious tasks often use names mimicking legitimate Windows services.
+  </Step>
+  
+  <Step title="Check WMI Subscriptions">
+    Advanced persistence uses WMI event subscriptions:
+    
+    ```powershell
+    Get-WmiObject -Namespace root\subscription -Class __EventFilter
+    Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer
+    Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding
+    ```
+  </Step>
+</Steps>
+
+## Network Indicators
+
+<Accordion title="Webhook Traffic">
+  Information stealers commonly use Discord or Telegram webhooks for data exfiltration:
+  
+  **Discord Webhook Detection:**
+  - Monitor HTTPS POST requests to `discord.com/api/webhooks/*`
+  - Look for large file uploads (ZIP archives containing stolen data)
+  - Check for JSON payloads with embedded fields and user information
+  
+  **Telegram Bot Detection:**
+  - Monitor traffic to `api.telegram.org/bot*/sendMessage`
+  - Monitor traffic to `api.telegram.org/bot*/sendDocument`
+  - Large file uploads to Telegram Bot API endpoints
+</Accordion>
+
+<Accordion title="External IP Lookups">
+  Stealers often query external services to identify the victim's public IP:
+  
+  - Requests to `api.ipify.org`
+  - Requests to `icanhazip.com`
+  - Requests to `ifconfig.me/ip`
+  
+  Multiple rapid requests to IP lookup services can indicate reconnaissance activity.
+</Accordion>
+
+## Anti-Analysis Evasion Detection
+
+<Info>
+  Phantom implements several anti-analysis techniques. Detecting these behaviors can help identify the malware even when obfuscated.
+</Info>
+
+<Accordion title="VM Detection Checks">
+  Monitor for processes checking VM indicators:
+  
+  - Registry queries for VM-specific keys:
+    - `HKLM\SOFTWARE\VMware, Inc.\VMware Tools`
+    - `HKLM\SOFTWARE\Oracle\VirtualBox Guest Additions`
+    - `HKLM\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters`
+  
+  - Process enumeration looking for:
+    - `vmtoolsd.exe`, `vmwaretray.exe`, `vmwareuser.exe`
+    - `vboxservice.exe`, `vboxtray.exe`
+    - `qemu-ga.exe`, `vdagent.exe`
+  
+  - MAC address enumeration via `getmac` command
+</Accordion>
+
+<Accordion title="Debugger Detection">
+  Anti-debugging techniques that can be detected:
+  
+  - Calls to `IsDebuggerPresent` API
+  - Calls to `CheckRemoteDebuggerPresent` API
+  - `NtQueryInformationProcess` with `ProcessDebugPort` class
+  - `NtSetInformationThread` with `ThreadHideFromDebugger` flag
+  - Timing checks to detect single-stepping
+</Accordion>
+
+<Accordion title="Memory Patching">
+  AMSI and ETW patching attempts:
+  
+  - `VirtualProtect` calls on `amsi.dll!AmsiScanBuffer`
+  - `VirtualProtect` calls on `ntdll.dll!EtwEventWrite`
+  - Memory modifications to security monitoring functions
+  - These should trigger EDR/AV memory protection alerts
+</Accordion>
+
+## EDR/SIEM Detection Rules
+
+### File Access Rules
+
+```yaml
+rule: suspicious_browser_database_access
+description: Non-browser process accessing browser credential databases
+conditions:
+  - process_name NOT IN [chrome.exe, msedge.exe, brave.exe, firefox.exe]
+  - file_path MATCHES *\\Login Data
+  - file_operation IN [read, copy]
+severity: high
+```
+
+### Network Rules
+
+```yaml
+rule: discord_webhook_exfiltration
+description: Large data upload to Discord webhook
+conditions:
+  - destination MATCHES discord.com/api/webhooks/*
+  - http_method = POST
+  - upload_size > 1MB
+severity: critical
+```
+
+### Process Behavior Rules
+
+```yaml
+rule: dpapi_credential_theft
+description: DPAPI usage combined with browser database access
+conditions:
+  - api_call = CryptUnprotectData
+  - file_access MATCHES *\\User Data\\*\\Login Data
+  - time_window = 60s
+severity: critical
+```
+
+## File System Indicators
+
+<Accordion title="Temporary File Artifacts">
+  Phantom copies browser databases to temporary locations before reading:
+  
+  - `%TEMP%\login_data_*`
+  - `%TEMP%\cookies_*`
+  - `%TEMP%\webdata_*`
+  - `%TEMP%\history_*`
+  
+  These files are typically deleted after use but may remain if the process crashes.
+</Accordion>
+
+<Accordion title="Exfiltration Archives">
+  Look for suspicious ZIP archives in temporary directories:
+  
+  - Filenames containing computer names and timestamps
+  - Archives containing folders named: `passwords.txt`, `cookies.txt`, `wallets/`, `discord_tokens.txt`
+  - Archives created shortly before network uploads
+</Accordion>
+
+## Memory Forensics
+
+Memory analysis can reveal stealer activity:
+
+- Strings containing browser database paths in non-browser processes
+- Decrypted credentials in process memory
+- Discord/Telegram webhook URLs in memory
+- Patterns matching browser master encryption keys
+- DPAPI decrypted data structures
+
+## System Resource Checks
+
+<Info>
+  Phantom includes sandbox evasion based on system resources. Monitoring for these checks can help detect the malware.
+</Info>
+
+- Processes checking total RAM (< 4GB indicates sandbox)
+- CPU core count enumeration
+- Disk size queries via `GetDiskFreeSpaceExW`
+- Recent files directory enumeration
+- System uptime checks via `GetTickCount64`
+
+## Detection Summary
+
+<Steps>
+  <Step title="Enable File System Monitoring">
+    Configure EDR to monitor browser data directories and alert on non-browser access.
+  </Step>
+  
+  <Step title="Monitor Network Traffic">
+    Inspect HTTPS traffic for webhook patterns and large uploads to messaging platforms.
+  </Step>
+  
+  <Step title="Track API Calls">
+    Hook DPAPI functions and monitor for suspicious CryptUnprotectData usage patterns.
+  </Step>
+  
+  <Step title="Behavioral Analysis">
+    Combine multiple indicators (file access + network + API calls) for high-confidence detection.
+  </Step>
+</Steps>
+
+<Warning>
+  **Important**: Single indicators may produce false positives. Correlate multiple detection methods for accurate identification of information stealer activity.
+</Warning>

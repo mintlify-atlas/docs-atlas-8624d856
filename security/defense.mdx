@@ -1,0 +1,405 @@
+---
+title: 'Defense & Protection'
+description: 'Best practices and recommendations to protect against information stealer malware'
+---
+
+<Info>
+  This page provides comprehensive guidance on protecting systems and users from information stealing malware like Phantom and similar threats.
+</Info>
+
+## User-Level Protections
+
+### Password Management
+
+<Accordion title="Use a Password Manager">
+  **Why browser-stored passwords are vulnerable:**
+  
+  - Browser passwords use Windows DPAPI for encryption
+  - Any process running as your user can decrypt them
+  - Stealers can extract passwords in seconds without admin rights
+  
+  **Recommended password managers:**
+  
+  - **Bitwarden** (open source, cloud or self-hosted)
+  - **1Password** (strong security, enterprise features)
+  - **KeePassXC** (offline, encrypted database)
+  
+  These use master passwords and additional encryption layers that stealers cannot easily bypass.
+</Accordion>
+
+<Accordion title="Enable Multi-Factor Authentication (2FA)">
+  Even if credentials are stolen, 2FA provides critical protection:
+  
+  **Best 2FA methods (in order of security):**
+  
+  1. **Hardware security keys** (YubiKey, Titan Key)
+     - Phishing-resistant
+     - Cannot be stolen remotely
+  
+  2. **TOTP authenticator apps** (Authy, Google Authenticator, Microsoft Authenticator)
+     - Better than SMS
+     - Still vulnerable if device is compromised
+  
+  3. **SMS codes** (least secure, but better than nothing)
+     - Vulnerable to SIM swapping
+     - Use only if no other option available
+  
+  <Warning>
+    Enable 2FA on all critical accounts: email, banking, cryptocurrency exchanges, and cloud storage.
+  </Warning>
+</Accordion>
+
+### Cryptocurrency Protection
+
+<Steps>
+  <Step title="Use Hardware Wallets">
+    Software wallets (Exodus, Electrum, MetaMask) store private keys on your computer, making them vulnerable to stealers.
+    
+    **Hardware wallet benefits:**
+    - Private keys never leave the device
+    - Requires physical confirmation for transactions
+    - Immune to software-based theft
+    
+    **Recommended hardware wallets:**
+    - Ledger Nano S/X
+    - Trezor Model T
+    - BitBox02
+  </Step>
+  
+  <Step title="Secure Software Wallets">
+    If you must use software wallets:
+    
+    - Keep only small amounts for daily use
+    - Use password-protected keystores
+    - Enable wallet encryption features
+    - Store recovery phrases offline (never digital)
+    - Use dedicated device for crypto transactions
+  </Step>
+  
+  <Step title="Browser Extension Precautions">
+    Browser extension wallets (MetaMask, Phantom, Coinbase Wallet) are high-value targets:
+    
+    - Lock wallet when not in use
+    - Use strong wallet passwords
+    - Clear browser data regularly
+    - Consider using in dedicated browser profile
+    - Never store large amounts in browser wallets
+  </Step>
+</Steps>
+
+### File Storage Best Practices
+
+<Accordion title="Sensitive File Protection">
+  Stealers often target common locations like Desktop and Documents:
+  
+  **Protection strategies:**
+  
+  - **Encrypt sensitive files** using tools like:
+    - VeraCrypt (encrypted containers)
+    - BitLocker (Windows built-in)
+    - 7-Zip with AES-256 encryption
+  
+  - **Avoid storing on Desktop/Documents:**
+    - Use dedicated encrypted folders
+    - Store in cloud with zero-knowledge encryption (Tresorit, Proton Drive)
+  
+  - **Sensitive file types to protect:**
+    - SSH private keys
+    - PGP/GPG keys
+    - Cryptocurrency recovery phrases
+    - Password manager databases
+    - API keys and tokens
+</Accordion>
+
+## System-Level Protections
+
+### Endpoint Detection & Response (EDR)
+
+<Info>
+  EDR solutions provide behavioral detection that can catch stealers even when traditional antivirus fails.
+</Info>
+
+<Accordion title="Enterprise EDR Solutions">
+  **Recommended EDR platforms:**
+  
+  - **Microsoft Defender for Endpoint**
+    - Behavioral monitoring
+    - AMSI integration
+    - Credential Guard support
+  
+  - **CrowdStrike Falcon**
+    - AI-powered threat detection
+    - Blocks credential access patterns
+  
+  - **SentinelOne**
+    - Autonomous response
+    - Rollback capabilities
+  
+  - **Carbon Black**
+    - Deep process inspection
+    - File access monitoring
+  
+  **Key EDR features for stealer protection:**
+  - File system access monitoring
+  - DPAPI call hooking
+  - Network traffic inspection
+  - Memory protection
+  - Behavioral analysis
+</Accordion>
+
+<Accordion title="Home/SMB Solutions">
+  For individual users and small businesses:
+  
+  - **Windows Defender** (built-in, continuously improving)
+    - Enable real-time protection
+    - Enable cloud-delivered protection
+    - Enable automatic sample submission
+  
+  - **Malwarebytes Premium**
+    - Anti-exploit protection
+    - Ransomware protection
+    - Web protection
+  
+  - **ESET Internet Security**
+    - Banking & payment protection
+    - Network attack protection
+    - UEFI scanner
+</Accordion>
+
+### Windows Security Hardening
+
+<Steps>
+  <Step title="Enable Credential Guard">
+    Windows Credential Guard protects against credential theft:
+    
+    ```powershell
+    # Check if Credential Guard is available
+    Get-ComputerInfo | Select DeviceGuardSecurityServicesConfigured
+    
+    # Enable Credential Guard (requires reboot)
+    Enable-WindowsOptionalFeature -Online -FeatureName Windows-Defender-ApplicationGuard
+    ```
+    
+    **Requirements:**
+    - Windows 10 Enterprise/Education or Windows 11
+    - UEFI firmware
+    - Virtualization extensions enabled
+  </Step>
+  
+  <Step title="Configure Windows Defender">
+    Optimize Windows Defender for maximum protection:
+    
+    ```powershell
+    # Enable real-time monitoring
+    Set-MpPreference -DisableRealtimeMonitoring $false
+    
+    # Enable behavior monitoring
+    Set-MpPreference -DisableBehaviorMonitoring $false
+    
+    # Enable cloud protection
+    Set-MpPreference -MAPSReporting Advanced
+    
+    # Enable automatic sample submission
+    Set-MpPreference -SubmitSamplesConsent SendAllSamples
+    
+    # Enable controlled folder access (ransomware protection)
+    Set-MpPreference -EnableControlledFolderAccess Enabled
+    ```
+  </Step>
+  
+  <Step title="Enable Attack Surface Reduction (ASR)">
+    ASR rules block common stealer behaviors:
+    
+    ```powershell
+    # Block credential stealing from lsass.exe
+    Add-MpPreference -AttackSurfaceReductionRules_Ids 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 -AttackSurfaceReductionRules_Actions Enabled
+    
+    # Block process creations from Office apps
+    Add-MpPreference -AttackSurfaceReductionRules_Ids d4f940ab-401b-4efc-aadc-ad5f3c50688a -AttackSurfaceReductionRules_Actions Enabled
+    
+    # Block untrusted programs from removable drives
+    Add-MpPreference -AttackSurfaceReductionRules_Ids b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4 -AttackSurfaceReductionRules_Actions Enabled
+    ```
+  </Step>
+  
+  <Step title="Enable AMSI Protection">
+    Anti-Malware Scan Interface (AMSI) helps detect stealer payloads:
+    
+    - Ensure AMSI is enabled (default in Windows 10/11)
+    - Keep Windows updated to patch AMSI bypasses
+    - Monitor for VirtualProtect calls on amsi.dll
+  </Step>
+  
+  <Step title="Restrict PowerShell Execution">
+    Configure PowerShell security to prevent abuse:
+    
+    ```powershell
+    # Enable PowerShell script block logging
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -Name "EnableScriptBlockLogging" -Value 1
+    
+    # Set execution policy
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine
+    
+    # Enable module logging
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging" -Name "EnableModuleLogging" -Value 1
+    ```
+  </Step>
+</Steps>
+
+### Application-Level Hardening
+
+<Accordion title="Browser Hardening">
+  Reduce attack surface and limit stealer effectiveness:
+  
+  **Chrome/Edge/Brave:**
+  - Don't save passwords in browser (use password manager instead)
+  - Regularly clear browsing data
+  - Disable autofill for sensitive information
+  - Use browser profiles to isolate sensitive activities
+  - Enable "Safe Browsing" protection
+  
+  **Firefox:**
+  - Use master password feature
+  - Disable password save prompts
+  - Enable Enhanced Tracking Protection
+  - Consider using Firefox containers
+</Accordion>
+
+<Accordion title="Discord/Telegram Security">
+  Protect messaging app tokens:
+  
+  **Discord:**
+  - Enable 2FA on your account
+  - Log out when not in use (clears some tokens)
+  - Regularly change your password
+  - Monitor authorized apps in settings
+  
+  **Telegram:**
+  - Use Telegram's "Recent sessions" to monitor active devices
+  - Enable two-step verification
+  - Set auto-delete for sensitive conversations
+  - Use secret chats for sensitive communications
+</Accordion>
+
+## Network-Level Protections
+
+<Accordion title="DNS Filtering">
+  Block exfiltration endpoints at DNS level:
+  
+  **Enterprise solutions:**
+  - Cisco Umbrella
+  - Cloudflare Gateway
+  - Quad9 (free)
+  
+  **Home solutions:**
+  - Pi-hole (self-hosted)
+  - NextDNS
+  - AdGuard DNS
+  
+  **Blocklist categories:**
+  - Newly registered domains
+  - File sharing services
+  - Webhook/bot API endpoints (if not needed)
+</Accordion>
+
+<Accordion title="Firewall Rules">
+  Configure outbound firewall rules to limit exfiltration:
+  
+  - Block outbound connections from suspicious locations (Temp, AppData)
+  - Whitelist approach for critical systems
+  - Monitor and alert on large outbound transfers
+  - Block common C2 and webhook endpoints
+</Accordion>
+
+## User Education
+
+<Info>
+  Technical controls are essential, but user awareness is the first line of defense.
+</Info>
+
+<Steps>
+  <Step title="Recognize Social Engineering">
+    Stealers are typically delivered through:
+    
+    - Fake software downloads (cracks, keygens, cheats)
+    - Malicious email attachments
+    - Trojanized legitimate software
+    - Discord/Telegram malware
+    - Fake browser extensions
+    
+    **Red flags:**
+    - Software from unofficial sources
+    - Requests to disable antivirus
+    - Unexpected executable attachments
+    - Too-good-to-be-true offers
+  </Step>
+  
+  <Step title="Safe Download Practices">
+    - Download software only from official websites
+    - Verify file signatures when available
+    - Check VirusTotal for suspicious files
+    - Be suspicious of .exe files from untrusted sources
+    - Don't run software that requires disabling AV
+  </Step>
+  
+  <Step title="Incident Response Preparation">
+    If you suspect infection:
+    
+    1. **Immediately disconnect from network**
+    2. **Change all passwords from a clean device**
+    3. **Revoke active sessions on critical accounts**
+    4. **Transfer cryptocurrency to new wallets**
+    5. **Run full system scan or reimage**
+    6. **Monitor financial accounts for fraud**
+  </Step>
+</Steps>
+
+## Monitoring & Detection
+
+<Accordion title="Event Log Monitoring">
+  Monitor Windows Event Logs for stealer indicators:
+  
+  **Key event IDs:**
+  - **4688**: Process creation (track new processes)
+  - **4663**: File access (monitor browser data directories)
+  - **4657**: Registry modification (persistence detection)
+  - **5157**: Network connection blocked (firewall blocks)
+  
+  **PowerShell events:**
+  - **4104**: Script block logging
+  - **4103**: Module logging
+</Accordion>
+
+<Accordion title="File Integrity Monitoring">
+  Monitor critical browser files for unauthorized access:
+  
+  - `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data`
+  - `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Login Data`
+  - `%APPDATA%\Discord\Local Storage\leveldb\`
+  
+  Tools:
+  - OSSEC
+  - Tripwire
+  - Windows File Integrity Monitoring
+</Accordion>
+
+## Defense Summary
+
+<Warning>
+  **Defense in Depth**: No single control is sufficient. Implement multiple layers to effectively protect against information stealers.
+</Warning>
+
+**Critical protections:**
+
+1. Use password managers, not browser password storage
+2. Enable 2FA on all critical accounts
+3. Use hardware wallets for cryptocurrency
+4. Deploy EDR on all endpoints
+5. Keep systems and software updated
+6. Educate users on social engineering
+7. Monitor for suspicious behavior
+8. Have incident response plan ready
+
+<Info>
+  **Remember**: The most sophisticated technical defenses can be undermined by a single user clicking a malicious link. Combine technical controls with user education for maximum effectiveness.
+</Info>

